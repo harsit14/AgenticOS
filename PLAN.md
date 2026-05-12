@@ -483,15 +483,15 @@ interface Pipeline {
 - Branch visualization for parallel paths
 
 **Deliverables:**
-- [ ] Canvas component (React Flow or custom)
-- [ ] Pipeline CRUD API
-- [ ] Drag-and-drop pipeline builder UI
-- [ ] Node palette with all node types
-- [ ] Pipeline validation (cycles, missing inputs)
-- [ ] Pipeline execution engine
-- [ ] Live execution visualization
-- [ ] Pipeline templates (pre-built workflows)
-- [ ] Branch/parallel execution support
+- [x] Canvas component (React Flow or custom)
+- [x] Pipeline CRUD API
+- [x] Drag-and-drop pipeline builder UI
+- [x] Node palette with all node types
+- [x] Pipeline validation (cycles, missing inputs)
+- [x] Pipeline execution engine
+- [x] Live execution visualization
+- [x] Pipeline templates (pre-built workflows)
+- [x] Branch/parallel execution support
 
 ---
 
@@ -522,14 +522,14 @@ interface AgentMessage {
 - Observer: A runs, B, C observe without blocking
 
 **Deliverables:**
-- [ ] Agent-to-agent messaging API
-- [ ] Shared context store
-- [ ] Pipeline execution engine
-- [ ] Sequential/parallel execution patterns
-- [ ] Conditional branching logic
-- [ ] Loop handling with max iterations
-- [ ] Error propagation between agents
-- [ ] Timeout handling
+- [x] Agent-to-agent messaging API
+- [x] Shared context store
+- [x] Pipeline execution engine
+- [x] Sequential/parallel execution patterns
+- [x] Conditional branching logic
+- [x] Loop handling with max iterations
+- [x] Error propagation between agents
+- [x] Timeout handling
 
 ---
 
@@ -571,12 +571,12 @@ interface AgentTemplate {
 - Fork and customize
 
 **Deliverables:**
-- [ ] Template listing API
-- [ ] Template creation from existing agent
-- [ ] Template install workflow
-- [ ] Marketplace UI (browse, search, install)
-- [ ] Rating system
-- [ ] Template submission for curation
+- [x] Template listing API
+- [x] Template creation from existing agent
+- [x] Template install workflow
+- [x] Marketplace UI (browse, search, install)
+- [x] Rating system
+- [x] Template submission for curation
 
 ---
 
@@ -603,13 +603,13 @@ interface AgentTemplate {
 ```
 
 **Deliverables:**
-- [ ] Efficiency tracking system
-- [ ] Badge definition and awarding logic
-- [ ] Leaderboard API and UI
-- [ ] Streak tracking (daily active agents)
-- [ ] Achievement notifications
-- [ ] Cost savings dashboard
-- [ ] Comparison charts (before/after optimization)
+- [x] Efficiency tracking system
+- [x] Badge definition and awarding logic
+- [x] Leaderboard API and UI
+- [x] Streak tracking (daily active agents)
+- [x] Achievement notifications
+- [x] Cost savings dashboard
+- [x] Comparison charts (before/after optimization)
 
 ---
 

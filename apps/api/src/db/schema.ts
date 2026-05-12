@@ -167,6 +167,35 @@ export const pipelines = sqliteTable('pipelines', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 });
 
+// Pipeline Executions - Track pipeline runs
+export const pipelineExecutions = sqliteTable('pipeline_executions', {
+  id: text('id').primaryKey(),
+  pipelineId: text('pipeline_id').notNull().references(() => pipelines.id),
+  status: text('status', { enum: ['pending', 'running', 'completed', 'failed', 'cancelled'] }).notNull().default('pending'),
+  startedAt: integer('started_at', { mode: 'timestamp' }).notNull(),
+  endedAt: integer('ended_at', { mode: 'timestamp' }),
+  triggerType: text('trigger_type', { enum: ['manual', 'scheduled', 'api', 'webhook'] }).notNull().default('manual'),
+  input: text('input', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
+  output: text('output', { mode: 'json' }).$type<Record<string, unknown>>(),
+  error: text('error'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+});
+
+// Node Executions - Track individual node runs
+export const nodeExecutions = sqliteTable('node_executions', {
+  id: text('id').primaryKey(),
+  executionId: text('execution_id').notNull().references(() => pipelineExecutions.id),
+  nodeId: text('node_id').notNull(),
+  status: text('status', { enum: ['idle', 'running', 'success', 'error', 'skipped'] }).notNull().default('idle'),
+  startedAt: integer('started_at', { mode: 'timestamp' }),
+  endedAt: integer('ended_at', { mode: 'timestamp' }),
+  input: text('input', { mode: 'json' }).$type<unknown>(),
+  output: text('output', { mode: 'json' }).$type<unknown>(),
+  error: text('error'),
+  latencyMs: integer('latency_ms').default(0),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+});
+
 // User Stats - Gamification stats
 export const userStats = sqliteTable('user_stats', {
   id: text('id').primaryKey(),
@@ -203,6 +232,8 @@ export type UsageRecordInsert = typeof usageRecords.$inferInsert;
 export type BudgetAlertInsert = typeof budgetAlerts.$inferInsert;
 export type AgentTemplateInsert = typeof agentTemplates.$inferInsert;
 export type PipelineInsert = typeof pipelines.$inferInsert;
+export type PipelineExecutionInsert = typeof pipelineExecutions.$inferInsert;
+export type NodeExecutionInsert = typeof nodeExecutions.$inferInsert;
 export type UserStatsInsert = typeof userStats.$inferInsert;
 export type SettingsInsert = typeof settings.$inferInsert;
 
@@ -216,5 +247,7 @@ export type UsageRecordSelect = typeof usageRecords.$inferSelect;
 export type BudgetAlertSelect = typeof budgetAlerts.$inferSelect;
 export type AgentTemplateSelect = typeof agentTemplates.$inferSelect;
 export type PipelineSelect = typeof pipelines.$inferSelect;
+export type PipelineExecutionSelect = typeof pipelineExecutions.$inferSelect;
+export type NodeExecutionSelect = typeof nodeExecutions.$inferSelect;
 export type UserStatsSelect = typeof userStats.$inferSelect;
 export type SettingsSelect = typeof settings.$inferSelect;

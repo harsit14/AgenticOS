@@ -11,6 +11,9 @@ import { sessionsRouter } from './routes/sessions.js';
 import { usageRouter } from './routes/usage.js';
 import { settingsRouter } from './routes/settings.js';
 import { metricsRouter } from './routes/metrics.js';
+import { pipelineRoutes } from './routes/pipelines.js';
+import { marketplaceRoutes } from './routes/marketplace.js';
+import { gamificationRoutes } from './routes/gamification.js';
 import { initTelemetry, shutdownTelemetry } from './telemetry/index.js';
 import { db, initDb } from './db/index.js';
 
@@ -58,6 +61,9 @@ async function buildApp() {
   await app.register(usageRouter, { prefix: '/api/usage' });
   await app.register(settingsRouter, { prefix: '/api/settings' });
   await app.register(metricsRouter, { prefix: '/api/metrics' });
+  await app.register(pipelineRoutes, { prefix: '/api' });
+  await app.register(marketplaceRoutes, { prefix: '/api' });
+  await app.register(gamificationRoutes, { prefix: '/api' });
 
   return app;
 }

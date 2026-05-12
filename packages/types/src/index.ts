@@ -201,6 +201,57 @@ export interface Pipeline {
   updatedAt: Date;
 }
 
+// Pipeline Execution types
+
+export type ExecutionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type NodeExecutionStatus = 'idle' | 'running' | 'success' | 'error' | 'skipped';
+
+export interface PipelineExecution {
+  id: string;
+  pipelineId: string;
+  status: ExecutionStatus;
+  startedAt: Date;
+  endedAt?: Date;
+  triggerType: 'manual' | 'scheduled' | 'api' | 'webhook';
+  input: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface NodeExecution {
+  id: string;
+  executionId: string;
+  nodeId: string;
+  status: NodeExecutionStatus;
+  startedAt: Date;
+  endedAt?: Date;
+  input: unknown;
+  output?: unknown;
+  error?: string;
+  latencyMs: number;
+}
+
+// Condition node types
+export type ConditionOperator = 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'not_contains';
+
+export interface ConditionConfig {
+  field: string;
+  operator: ConditionOperator;
+  value: unknown;
+}
+
+export interface DelayConfig {
+  durationMs: number;
+}
+
+export interface MergeConfig {
+  strategy: 'all' | 'first' | 'fail_fast';
+}
+
+export interface SplitConfig {
+  branches: string[];
+}
+
 // Agent template for marketplace
 
 export interface AgentTemplate {

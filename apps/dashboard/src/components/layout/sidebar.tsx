@@ -13,11 +13,15 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  GitBranch,
+  Store,
 } from 'lucide-react';
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/agents', label: 'Agents', icon: Bot },
+  { href: '/pipelines', label: 'Pipelines', icon: GitBranch },
+  { href: '/marketplace', label: 'Marketplace', icon: Store },
   { href: '/monitor', label: 'Live Monitor', icon: Activity },
   { href: '/providers', label: 'Providers', icon: Database },
   { href: '/analytics', label: 'Analytics', icon: AlertTriangle },
