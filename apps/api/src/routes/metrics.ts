@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { getMetricsSnapshot, recordRequest, recordError } from '../../telemetry/index.js';
-import { getUsageTracker, getBudgetAlertManager } from '../../core/telemetry/usage-tracker.js';
+import { getMetricsSnapshot, recordRequest, recordError } from '../telemetry/index.js';
+import { getUsageTracker, getBudgetAlertManager } from '../core/telemetry/usage-tracker.js';
 
 // Prometheus metrics endpoint
 export async function metricsRouter(app: FastifyInstance) {

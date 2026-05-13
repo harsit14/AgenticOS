@@ -183,7 +183,7 @@ export default function MonitorPage() {
                     <span className="text-xs opacity-70">assistant</span>
                     <span className="text-xs opacity-50 animate-pulse">streaming...</span>
                   </div>
-                  <p className="whitespace-pre-wrap">{streamingContent}</span>
+                  <p className="whitespace-pre-wrap">{streamingContent}</p>
                 </div>
               </div>
             )}

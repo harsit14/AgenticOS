@@ -1,5 +1,5 @@
 import type { Agent } from '@agentic-os/types';
-import { validateAgent } from './agents/types.js';
+import { validateAgent } from './types.js';
 
 export interface ExportedAgentConfig {
   version: string;

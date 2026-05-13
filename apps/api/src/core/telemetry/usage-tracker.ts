@@ -1,5 +1,5 @@
-import { db } from '../db/index.js';
-import { budgetAlerts, usageRecords, userStats } from '../db/schema.js';
+import { db } from '../../db/index.js';
+import { budgetAlerts, usageRecords, userStats } from '../../db/schema.js';
 import { eq, and, gte, lte, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 

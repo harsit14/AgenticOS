@@ -1,45 +1,38 @@
-import type { Metadata } from 'next';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { getToolRegistry } from '@/lib/tools-api';
 
-// This would be server-side in a real app
-async function getTools() {
-  return [
-    { id: 'calculator', name: 'Calculator', description: 'Perform mathematical calculations', category: 'data', requiresApproval: false },
-    { id: 'web_search', name: 'Web Search', description: 'Search the web for information', category: 'web', requiresApproval: false },
-    { id: 'code_interpreter', name: 'Code Interpreter', description: 'Execute code in a sandboxed environment', category: 'code', requiresApproval: true },
-    { id: 'http_request', name: 'HTTP Request', description: 'Make HTTP requests to external APIs', category: 'api', requiresApproval: true },
-    { id: 'file_read', name: 'File Read', description: 'Read contents of a file', category: 'file', requiresApproval: true },
-    { id: 'file_write', name: 'File Write', description: 'Write content to a file', category: 'file', requiresApproval: true },
-  ];
-}
+const tools = [
+  { id: 'calculator', name: 'Calculator', description: 'Perform mathematical calculations', category: 'data', requiresApproval: false },
+  { id: 'web_search', name: 'Web Search', description: 'Search the web for information', category: 'web', requiresApproval: false },
+  { id: 'code_interpreter', name: 'Code Interpreter', description: 'Execute code in a sandboxed environment', category: 'code', requiresApproval: true },
+  { id: 'http_request', name: 'HTTP Request', description: 'Make HTTP requests to external APIs', category: 'api', requiresApproval: true },
+  { id: 'file_read', name: 'File Read', description: 'Read contents of a file', category: 'file', requiresApproval: true },
+  { id: 'file_write', name: 'File Write', description: 'Write content to a file', category: 'file', requiresApproval: true },
+];
 
-async function getPersonaPresets() {
-  return [
-    { id: 'professional', name: 'Professional', tone: 'professional', description: 'Business-focused, concise, action-oriented' },
-    { id: 'casual', name: 'Casual', tone: 'casual', description: 'Friendly, warm, approachable' },
-    { id: 'technical', name: 'Technical', tone: 'technical', description: 'Detailed, precise, code-focused' },
-    { id: 'creative', name: 'Creative', tone: 'creative', description: 'Imaginative, brainstorming, outside-the-box' },
-  ];
-}
+const personaPresets = [
+  { id: 'professional', name: 'Professional', tone: 'professional', description: 'Business-focused, concise, action-oriented' },
+  { id: 'casual', name: 'Casual', tone: 'casual', description: 'Friendly, warm, approachable' },
+  { id: 'technical', name: 'Technical', tone: 'technical', description: 'Detailed, precise, code-focused' },
+  { id: 'creative', name: 'Creative', tone: 'creative', description: 'Imaginative, brainstorming, outside-the-box' },
+];
 
-async function getMemoryStrategies() {
-  return [
-    { id: 'sliding_window', name: 'Sliding Window', description: 'Keeps most recent N messages. Simple and effective.', defaultMaxMessages: 50 },
-    { id: 'summary', name: 'Summary', description: 'Summarizes conversation periodically. Better for long threads.', defaultMaxMessages: 20 },
-    { id: 'full', name: 'Full Context', description: 'Keeps all messages. Best for short conversations.', defaultMaxMessages: 100 },
-  ];
-}
+const memoryStrategies = [
+  { id: 'sliding_window', name: 'Sliding Window', description: 'Keeps most recent N messages. Simple and effective.', defaultMaxMessages: 50 },
+  { id: 'summary', name: 'Summary', description: 'Summarizes conversation periodically. Better for long threads.', defaultMaxMessages: 20 },
+  { id: 'full', name: 'Full Context', description: 'Keeps all messages. Best for short conversations.', defaultMaxMessages: 100 },
+];
 
-export default async function SettingsPage() {
-  const [tools, personaPresets, memoryStrategies] = await Promise.all([
-    getTools(),
-    getPersonaPresets(),
-    getMemoryStrategies(),
-  ]);
+const quickStartTemplates = [
+  { name: 'Code Assistant', description: 'Write, review, and debug code', category: 'development', icon: '💻' },
+  { name: 'Data Analyst', description: 'Analyze data and generate insights', category: 'analytics', icon: '📊' },
+  { name: 'Customer Support', description: 'Handle customer inquiries', category: 'support', icon: '🎧' },
+  { name: 'Research Assistant', description: 'Research and summarize information', category: 'research', icon: '🔍' },
+  { name: 'Creative Writer', description: 'Write and brainstorm content', category: 'writing', icon: '✍️' },
+];
 
+export default function SettingsPage() {
   return (
     <div className="p-8 space-y-8">
       <div>
@@ -120,7 +113,7 @@ export default async function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Agent Templates */}
+      {/* Quick Start Templates */}
       <Card>
         <CardHeader>
           <CardTitle>Quick Start Templates</CardTitle>
@@ -128,13 +121,7 @@ export default async function SettingsPage() {
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[
-              { name: 'Code Assistant', description: 'Write, review, and debug code', category: 'development', icon: '💻' },
-              { name: 'Data Analyst', description: 'Analyze data and generate insights', category: 'analytics', icon: '📊' },
-              { name: 'Customer Support', description: 'Handle customer inquiries', category: 'support', icon: '🎧' },
-              { name: 'Research Assistant', description: 'Research and summarize information', category: 'research', icon: '🔍' },
-              { name: 'Creative Writer', description: 'Write and brainstorm content', category: 'writing', icon: '✍️' },
-            ].map((template) => (
+            {quickStartTemplates.map((template) => (
               <div key={template.name} className="border rounded-lg p-4 hover:border-primary/50 transition-colors cursor-pointer">
                 <div className="text-2xl mb-2">{template.icon}</div>
                 <h3 className="font-medium">{template.name}</h3>

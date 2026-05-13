@@ -3,7 +3,7 @@ import type { StreamEvent } from '../providers/types.js';
 import { getProviderManager, getProviderForModel } from '../providers/index.js';
 import { getRateLimiter } from '../providers/rate-limiter.js';
 import { withSpan, recordRequest, recordError, incrementActiveSessions, decrementActiveSessions } from '../../telemetry/index.js';
-import { getUsageTracker } from '../../telemetry/usage-tracker.js';
+import { getUsageTracker } from '../telemetry/usage-tracker.js';
 
 export interface AgentExecutorConfig {
   modelId?: string;

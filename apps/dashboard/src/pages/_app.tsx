@@ -1,22 +1,11 @@
-import type { Metadata } from 'next';
+import type { AppProps } from 'next/app';
 import { DashboardLayout } from '@/components/layout/sidebar';
 import '../styles/globals.css';
 
-export const metadata: Metadata = {
-  title: 'Agentic Control Tower',
-  description: 'Unified platform for AI agent management and orchestration',
-};
-
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function App({ Component, pageProps }: AppProps) {
   return (
-    <html lang="en" className="dark">
-      <body className="min-h-screen bg-background font-sans antialiased">
-        <DashboardLayout>{children}</DashboardLayout>
-      </body>
-    </html>
+    <DashboardLayout>
+      <Component {...pageProps} />
+    </DashboardLayout>
   );
 }

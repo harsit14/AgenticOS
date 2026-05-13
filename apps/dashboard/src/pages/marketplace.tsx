@@ -44,7 +44,7 @@ export default function MarketplacePage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'popular' | 'rating' | 'recent'>('popular');
   const [isLoading, setIsLoading] = useState(true);
   const [installingId, setInstallingId] = useState<string | null>(null);
@@ -59,7 +59,7 @@ export default function MarketplacePage() {
     try {
       const params = new URLSearchParams();
       if (searchQuery) params.set('search', searchQuery);
-      if (selectedCategory) params.set('category', selectedCategory);
+      if (selectedCategory && selectedCategory !== 'all') params.set('category', selectedCategory);
       params.set('sort', sortBy);
 
       const response = await api.get(`/marketplace/templates?${params.toString()}`);
@@ -136,7 +136,7 @@ export default function MarketplacePage() {
             <SelectValue placeholder="Category" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All Categories</SelectItem>
+            <SelectItem value="all">All Categories</SelectItem>
             {categories.map((cat) => (
               <SelectItem key={cat.name} value={cat.name}>
                 {cat.name} ({cat.count})
@@ -171,9 +171,9 @@ export default function MarketplacePage() {
       {/* Categories Pills */}
       <div className="flex gap-2 mb-6 flex-wrap">
         <Button
-          variant={selectedCategory === '' ? 'default' : 'outline'}
+          variant={selectedCategory === 'all' ? 'default' : 'outline'}
           size="sm"
-          onClick={() => setSelectedCategory('')}
+          onClick={() => setSelectedCategory('all')}
         >
           All
         </Button>
