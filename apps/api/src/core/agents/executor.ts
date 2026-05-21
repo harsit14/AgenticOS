@@ -1,286 +1,610 @@
-import type { ChatMessage, ChatParams } from '@agentic-os/types';
-import type { StreamEvent } from '../providers/types.js';
-import { getProviderManager, getProviderForModel } from '../providers/index.js';
-import { getRateLimiter } from '../providers/rate-limiter.js';
-import { withSpan, recordRequest, recordError, incrementActiveSessions, decrementActiveSessions } from '../../telemetry/index.js';
-import { getUsageTracker } from '../telemetry/usage-tracker.js';
+import type {
+  ChatMessage,
+  ChatParams,
+  Message,
+  ToolCall,
+  ToolDefinition,
+  UsageInfo,
+} from '@agentic-os/types';
+import { countTokens } from '@agentic-os/types';
+import { and, eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
+import { db } from '../../db/index.js';
+import { agents, messages, models, providers, sessions, usageRecords } from '../../db/schema.js';
+import { getProviderManager } from '../providers/index.js';
+import { AuthenticationError } from '../providers/types.js';
+import type { LLMProvider } from '../providers/types.js';
+import { calculateCost } from '../cost/calculate.js';
+import { getSetting } from '../settings/index.js';
+import { ConfigurationError, InvalidInputError, NotFoundError } from '../errors.js';
+import { recordRequest, withSpan } from '../../telemetry/index.js';
+import { getToolRegistry } from './tool-registry.js';
 
-export interface AgentExecutorConfig {
-  modelId?: string;
-  temperature?: number;
-  maxTokens?: number;
-  systemPrompt?: string;
-  useStreaming?: boolean;
-  userId?: string;
-  agentId?: string;
+type MessageRow = typeof messages.$inferInsert;
+type SessionRow = typeof sessions.$inferSelect;
+
+export interface ExecuteMessageParams {
+  sessionId: string;
+  userMessage: string;
 }
 
-export interface ExecutionResult {
-  content: string;
-  finishReason: 'stop' | 'length' | 'tool_use' | 'error';
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-  };
-  latencyMs: number;
+export interface ExecuteMessageResult {
+  userMessage: Message;
+  assistantMessage: Message;
+  usage: UsageInfo;
   costUsd: number;
+  /** Number of tool-calling rounds taken before the final answer. */
+  toolSteps: number;
+}
+
+/** Events emitted by the streaming turn path. */
+export type StreamExecEvent =
+  | { type: 'delta'; content: string }
+  | { type: 'done'; messageId: string; usage: UsageInfo; costUsd: number }
+  | { type: 'error'; message: string };
+
+// Tool loop bounds. A step is one LLM call that requested tools.
+const MAX_TOOL_STEPS = 8;
+const MAX_LOOP_WALL_MS = 120_000;
+// Tool output fed back to the model is capped so a chatty tool can't blow the
+// context window.
+const MAX_TOOL_RESULT_CHARS = 4000;
+
+function truncate(text: string, max = MAX_TOOL_RESULT_CHARS): string {
+  return text.length > max
+    ? `${text.slice(0, max)}… [truncated ${text.length - max} chars]`
+    : text;
+}
+
+/**
+ * Run one tool call the model asked for and return the text to feed back.
+ * The agent may only use tools it was configured with; approval-gated tools
+ * are skipped (there is no approval queue in v1).
+ */
+async function runToolCall(
+  call: ToolCall,
+  agentTools: ToolDefinition[],
+  ctx: { sessionId: string; agentId: string },
+): Promise<string> {
+  const allowed = agentTools.find((t) => t.id === call.name);
+  if (!allowed) {
+    return `Error: tool "${call.name}" is not available to this agent.`;
+  }
+  if (allowed.requiresApproval) {
+    return `Error: tool "${call.name}" requires manual approval and was skipped.`;
+  }
+
+  let args: unknown;
+  try {
+    args = call.arguments ? JSON.parse(call.arguments) : {};
+  } catch {
+    return `Error: tool "${call.name}" was called with invalid JSON arguments.`;
+  }
+
+  const result = await getToolRegistry().execute(call.name, args, ctx);
+  if (result.success) {
+    return truncate(result.content || '(tool returned no output)');
+  }
+  return truncate(`Error: ${result.error ?? 'tool execution failed'}`);
+}
+
+// ---------------------------------------------------------------------------
+// Shared turn setup
+// ---------------------------------------------------------------------------
+
+interface PreparedTurn {
+  session: SessionRow;
+  agent: typeof agents.$inferSelect;
+  model: typeof models.$inferSelect;
+  provider: typeof providers.$inferSelect;
   modelId: string;
-  providerId: string;
+  llm: LLMProvider;
+  history: ChatMessage[];
+  trimmedMessages: number;
+  agentTools: ToolDefinition[];
+  toolsForLlm: ToolDefinition[] | undefined;
+  userMessageRow: MessageRow;
+  baseParams: Omit<ChatParams, 'messages' | 'tools'>;
 }
 
-export interface StreamHandler {
-  onContent: (content: string) => void;
-  onDone: (usage: { inputTokens: number; outputTokens: number; totalTokens: number }) => void;
-  onError: (error: string) => void;
+/**
+ * Shared setup for both the blocking and streaming turn paths:
+ *   1. Load + validate session, agent, model, provider, API key.
+ *   2. Build the conversation history and trim it to the context budget.
+ *   3. Persist the user message (before any LLM call, so it survives a failure).
+ *   4. Resolve the provider implementation.
+ */
+async function prepareTurn(sessionId: string, userContent: string): Promise<PreparedTurn> {
+  // 1. Session
+  const session = await db.select().from(sessions).where(eq(sessions.id, sessionId)).get();
+  if (!session) {
+    throw new NotFoundError(`Session not found: ${sessionId}`, 'session');
+  }
+  if (session.status !== 'active') {
+    throw new ConfigurationError(`Session is not active: ${sessionId} (${session.status})`);
+  }
+
+  // 2. Agent
+  const agent = await db.select().from(agents).where(eq(agents.id, session.agentId)).get();
+  if (!agent) {
+    throw new NotFoundError(`Agent not found: ${session.agentId}`, 'agent');
+  }
+
+  // 3. Resolve model id: session.modelId > agent.defaultModelId > settings.default_model_id
+  const defaultFromSettings = await getSetting('default_model_id');
+  const modelId = session.modelId || agent.defaultModelId || defaultFromSettings;
+  if (!modelId) {
+    throw new ConfigurationError(
+      'No model resolved: set session.modelId, agent.defaultModelId, or settings.default_model_id',
+    );
+  }
+
+  // 4. Model + provider
+  const model = await db.select().from(models).where(eq(models.id, modelId)).get();
+  if (!model) {
+    throw new NotFoundError(`Model not found: ${modelId}`, 'model');
+  }
+  const provider = await db.select().from(providers).where(eq(providers.id, model.providerId)).get();
+  if (!provider) {
+    throw new NotFoundError(`Provider not found: ${model.providerId}`, 'provider');
+  }
+
+  // 5. API key from settings (skip for local providers)
+  const apiKeys = (await getSetting('provider_api_keys')) ?? {};
+  const apiKey = apiKeys[provider.id];
+  if (!apiKey && !provider.isLocal) {
+    throw new AuthenticationError(provider.id);
+  }
+
+  // 6. Prior messages (oldest first), capped by the agent's memory window
+  const memoryMax = agent.memoryConfig?.maxMessages ?? 50;
+  const allPrior = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.sessionId, sessionId))
+    .orderBy(messages.createdAt)
+    .all();
+  const priorWindow = allPrior.slice(-memoryMax);
+
+  // Rebuild the conversation history. Tool-call plumbing (assistant tool_calls
+  // + tool results) is not stored on the messages table, so we drop `tool`
+  // rows and empty intermediate assistant rows — replaying them without their
+  // ids would violate the OpenAI message format.
+  const historyAll: ChatMessage[] = priorWindow
+    .filter((m) => m.role !== 'tool')
+    .filter((m) => !(m.role === 'assistant' && m.content.trim() === ''))
+    .map((m) => ({
+      role: m.role as ChatMessage['role'],
+      content: m.content,
+    }));
+
+  // 6b. Token-budget trim:
+  //   inputBudget = contextWindow − reservedForOutput − safetyMargin
+  // Drop the OLDEST history messages until system prompt + history + the new
+  // user message fit. If the system prompt + user message alone don't fit,
+  // there is nothing to drop — fail with a clear error.
+  const reservedOutput = agent.persona?.maxTokens ?? 4096;
+  const SAFETY_MARGIN = 256;
+  const inputBudget = Math.max(0, model.contextWindow - reservedOutput - SAFETY_MARGIN);
+  const perMessageOverhead = 4; // role / formatting tokens
+  const fixedTokens =
+    countTokens(agent.persona?.systemPrompt ?? '', modelId) +
+    countTokens(userContent, modelId) +
+    perMessageOverhead * 2;
+  if (fixedTokens > inputBudget) {
+    throw new InvalidInputError(
+      `Message too long for ${model.displayName}: the system prompt + your ` +
+        `message need ~${fixedTokens} tokens but only ${inputBudget} fit ` +
+        `(context window ${model.contextWindow}, ${reservedOutput} reserved for the reply).`,
+    );
+  }
+
+  const history: ChatMessage[] = [...historyAll];
+  let historyTokens = history.reduce(
+    (sum, m) => sum + countTokens(m.content, modelId) + perMessageOverhead,
+    0,
+  );
+  let trimmedMessages = 0;
+  while (history.length > 0 && fixedTokens + historyTokens > inputBudget) {
+    const dropped = history.shift()!;
+    historyTokens -= countTokens(dropped.content, modelId) + perMessageOverhead;
+    trimmedMessages++;
+  }
+
+  // 7. Decide whether tools are offered.
+  const agentTools: ToolDefinition[] = agent.tools ?? [];
+  const toolsEnabled = model.supportsFunctionCalling && agentTools.length > 0;
+  const toolsForLlm = toolsEnabled ? agentTools : undefined;
+
+  // 8. Persist the user message BEFORE the LLM call so it survives a failure.
+  const userMessageRow: MessageRow = {
+    id: nanoid(),
+    sessionId,
+    role: 'user',
+    content: userContent,
+    tokenCount: countTokens(userContent, modelId),
+    modelId,
+    latencyMs: 0,
+    costUsd: 0,
+    parentMessageId: priorWindow.at(-1)?.id ?? null,
+    createdAt: new Date(),
+  };
+  await db.insert(messages).values(userMessageRow).run();
+
+  // 9. Resolve the provider implementation.
+  const manager = getProviderManager();
+  if (apiKey) {
+    manager.configure(provider.id, { apiKey });
+  }
+  const llm = manager.getProvider(provider.id);
+  if (!llm) {
+    throw new ConfigurationError(`No provider implementation for: ${provider.id}`);
+  }
+
+  const baseParams: Omit<ChatParams, 'messages' | 'tools'> = {
+    model: model.name,
+    systemPrompt: agent.persona?.systemPrompt,
+    temperature: agent.persona?.temperature ?? 0.7,
+    maxTokens: agent.persona?.maxTokens ?? 4096,
+  };
+
+  return {
+    session,
+    agent,
+    model,
+    provider,
+    modelId,
+    llm,
+    history,
+    trimmedMessages,
+    agentTools,
+    toolsForLlm,
+    userMessageRow,
+    baseParams,
+  };
 }
 
-// Main executor for running agent conversations
-export class AgentExecutor {
-  private providerManager = getProviderManager();
-  private rateLimiter = getRateLimiter();
-  private usageTracker = getUsageTracker();
+/** Upsert the per-agent/model/day usage record with a single indexed lookup. */
+async function recordUsage(
+  agentId: string,
+  modelId: string,
+  usage: UsageInfo,
+  costUsd: number,
+  latencyMs: number,
+): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10);
+  const existing = await db
+    .select()
+    .from(usageRecords)
+    .where(
+      and(
+        eq(usageRecords.agentId, agentId),
+        eq(usageRecords.modelId, modelId),
+        eq(usageRecords.date, today),
+      ),
+    )
+    .get();
 
-  async execute(
-    messages: ChatMessage[],
-    config: AgentExecutorConfig
-  ): Promise<ExecutionResult> {
-    const modelId = config.modelId || 'claude-3-5-sonnet';
-    const provider = getProviderForModel(modelId);
-
-    if (!provider) {
-      throw new Error(`No provider available for model: ${modelId}`);
-    }
-
-    // Apply rate limiting
-    await this.rateLimiter.waitForToken(provider.providerId);
-
-    // Track active session
-    if (config.agentId) {
-      incrementActiveSessions(config.agentId);
-    }
-
-    const params: ChatParams = {
-      model: modelId,
-      messages,
-      systemPrompt: config.systemPrompt,
-      temperature: config.temperature,
-      maxTokens: config.maxTokens,
-    };
-
-    try {
-      const result = await withSpan(`llm.call.${provider.providerId}`, async () => {
-        const response = await provider.chat(params);
-        return response;
-      }, {
-        'model.id': modelId,
-        'provider.id': provider.providerId,
-        'llm.input_tokens': 0, // Will be updated
-        'llm.output_tokens': 0, // Will be updated
-      });
-
-      const executionResult: ExecutionResult = {
-        content: result.content,
-        finishReason: result.finishReason,
-        usage: result.usage,
-        latencyMs: result.latencyMs,
-        costUsd: result.costUsd,
+  if (existing) {
+    const nextCount = existing.requestCount + 1;
+    const nextAvgLatency =
+      (existing.avgLatencyMs * existing.requestCount + latencyMs) / nextCount;
+    await db
+      .update(usageRecords)
+      .set({
+        inputTokens: existing.inputTokens + usage.inputTokens,
+        outputTokens: existing.outputTokens + usage.outputTokens,
+        totalTokens: existing.totalTokens + usage.totalTokens,
+        costUsd: existing.costUsd + costUsd,
+        requestCount: nextCount,
+        avgLatencyMs: nextAvgLatency,
+      })
+      .where(eq(usageRecords.id, existing.id))
+      .run();
+  } else {
+    await db
+      .insert(usageRecords)
+      .values({
+        id: nanoid(),
+        agentId,
         modelId,
-        providerId: provider.providerId,
-      };
-
-      // Record metrics
-      recordRequest({
-        provider: provider.providerId,
-        model: modelId,
-        status: 'success',
-        inputTokens: result.usage.inputTokens,
-        outputTokens: result.usage.outputTokens,
-        latencyMs: result.latencyMs,
-        costUsd: result.costUsd,
-      });
-
-      // Record usage for billing and budget tracking
-      if (config.userId && config.agentId) {
-        await this.usageTracker.recordUsage({
-          userId: config.userId,
-          agentId: config.agentId,
-          modelId,
-          inputTokens: result.usage.inputTokens,
-          outputTokens: result.usage.outputTokens,
-          totalTokens: result.usage.totalTokens,
-          costUsd: result.costUsd,
-          latencyMs: result.latencyMs,
-        });
-      }
-
-      return executionResult;
-    } catch (error) {
-      const errorMessage = (error as Error).message;
-
-      // Record error
-      recordError(provider.providerId, modelId, errorMessage.split(':')[0] || 'unknown');
-
-      // Track session as error
-      if (config.agentId) {
-        decrementActiveSessions(config.agentId);
-      }
-
-      throw error;
-    } finally {
-      if (config.agentId) {
-        decrementActiveSessions(config.agentId);
-      }
-    }
-  }
-
-  async *stream(
-    messages: ChatMessage[],
-    config: AgentExecutorConfig,
-    handler: StreamHandler
-  ): AsyncGenerator<void> {
-    const modelId = config.modelId || 'claude-3-5-sonnet';
-    const provider = getProviderForModel(modelId);
-
-    if (!provider) {
-      handler.onError(`No provider available for model: ${modelId}`);
-      return;
-    }
-
-    // Apply rate limiting
-    await this.rateLimiter.waitForToken(provider.providerId);
-
-    // Track active session
-    if (config.agentId) {
-      incrementActiveSessions(config.agentId);
-    }
-
-    const params: ChatParams = {
-      model: modelId,
-      messages,
-      systemPrompt: config.systemPrompt,
-      temperature: config.temperature,
-      maxTokens: config.maxTokens,
-      streaming: true,
-    };
-
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-    let totalCost = 0;
-    let totalLatencyMs = 0;
-
-    try {
-      const startTime = Date.now();
-
-      for await (const event of provider.streamChat(params)) {
-        switch (event.type) {
-          case 'content':
-            handler.onContent(event.content);
-            totalOutputTokens++;
-            break;
-          case 'done':
-            totalInputTokens = event.usage.inputTokens;
-            totalOutputTokens = event.usage.outputTokens;
-            totalLatencyMs = Date.now() - startTime;
-            handler.onDone(event.usage);
-            break;
-          case 'error':
-            handler.onError(event.error);
-            recordError(provider.providerId, modelId, event.error);
-            break;
-        }
-      }
-
-      // Record metrics for streaming (approximate cost)
-      const pricing = this.getPricingForModel(modelId);
-      totalCost = (totalInputTokens * pricing.inputCostPer1M + totalOutputTokens * pricing.outputCostPer1M) / 1_000_000;
-
-      recordRequest({
-        provider: provider.providerId,
-        model: modelId,
-        status: 'success',
-        inputTokens: totalInputTokens,
-        outputTokens: totalOutputTokens,
-        latencyMs: totalLatencyMs,
-        costUsd: totalCost,
-      });
-
-      // Record usage for streaming (batched after completion)
-      if (config.userId && config.agentId && totalInputTokens + totalOutputTokens > 0) {
-        await this.usageTracker.recordUsage({
-          userId: config.userId,
-          agentId: config.agentId,
-          modelId,
-          inputTokens: totalInputTokens,
-          outputTokens: totalOutputTokens,
-          totalTokens: totalInputTokens + totalOutputTokens,
-          costUsd: totalCost,
-          latencyMs: totalLatencyMs,
-        });
-      }
-    } catch (error) {
-      handler.onError((error as Error).message);
-      recordError(provider.providerId, modelId, (error as Error).message);
-
-      if (config.agentId) {
-        decrementActiveSessions(config.agentId);
-      }
-    } finally {
-      if (config.agentId) {
-        decrementActiveSessions(config.agentId);
-      }
-    }
-  }
-
-  // Estimate cost before execution
-  estimateCost(modelId: string, messageCount: number): number {
-    const pricing = this.getPricingForModel(modelId);
-    const estimatedInputTokens = messageCount * 20;
-    return (estimatedInputTokens * pricing.inputCostPer1M) / 1_000_000;
-  }
-
-  private getPricingForModel(modelId: string): { inputCostPer1M: number; outputCostPer1M: number } {
-    const pricing: Record<string, { input: number; output: number }> = {
-      'claude-3-5-sonnet': { input: 3, output: 15 },
-      'claude-3-5-haiku': { input: 0.8, output: 4 },
-      'gpt-4o': { input: 5, output: 15 },
-      'gpt-4o-mini': { input: 0.15, output: 0.6 },
-      'gemini-1.5-pro': { input: 1.25, output: 5 },
-      'gemini-1.5-flash': { input: 0.075, output: 0.3 },
-    };
-
-    return pricing[modelId] || { input: 0, output: 0 };
-  }
-
-  // Get context window usage
-  getContextUsage(messages: ChatMessage[], systemPrompt: string): {
-    usedTokens: number;
-    maxTokens: number;
-    percentage: number;
-    withinLimit: boolean;
-  } {
-    const maxTokens = 200000;
-    const systemTokens = Math.ceil(systemPrompt.length / 4);
-    const messageTokens = messages.reduce((sum, m) => sum + Math.ceil(m.content.length / 4), 0);
-
-    const usedTokens = systemTokens + messageTokens + 4 + 4;
-    const percentage = (usedTokens / maxTokens) * 100;
-
-    return {
-      usedTokens,
-      maxTokens,
-      percentage,
-      withinLimit: usedTokens < maxTokens * 0.95,
-    };
+        date: today,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        costUsd,
+        requestCount: 1,
+        avgLatencyMs: latencyMs,
+        createdAt: new Date(),
+      })
+      .run();
   }
 }
 
-// Singleton instance
-let executor: AgentExecutor | null = null;
+/** Record last-activity on the session (sessions has no updatedAt column). */
+async function touchSession(session: SessionRow): Promise<void> {
+  await db
+    .update(sessions)
+    .set({
+      metadata: { ...(session.metadata ?? {}), lastActivityAt: new Date().toISOString() },
+    })
+    .where(eq(sessions.id, session.id))
+    .run();
+}
 
-export function getAgentExecutor(): AgentExecutor {
-  if (!executor) {
-    executor = new AgentExecutor();
+// ---------------------------------------------------------------------------
+// Blocking turn — runs the bounded agentic tool loop
+// ---------------------------------------------------------------------------
+
+/**
+ * Run a full user → assistant turn. If the agent has tools and the model
+ * supports function calling, this runs a bounded tool loop; otherwise it is a
+ * single LLM call. Persists every message and aggregates usage.
+ */
+export async function executeMessage(params: ExecuteMessageParams): Promise<ExecuteMessageResult> {
+  return withSpan('agent.execute', (span) => executeMessageInner(params, span), {
+    'session.id': params.sessionId,
+  });
+}
+
+async function executeMessageInner(
+  params: ExecuteMessageParams,
+  span: import('@opentelemetry/api').Span,
+): Promise<ExecuteMessageResult> {
+  const { sessionId, userMessage: userContent } = params;
+  const prepared = await prepareTurn(sessionId, userContent);
+  const {
+    session,
+    agent,
+    model,
+    provider,
+    modelId,
+    llm,
+    history,
+    trimmedMessages,
+    agentTools,
+    toolsForLlm,
+    userMessageRow,
+    baseParams,
+  } = prepared;
+
+  if (trimmedMessages > 0) {
+    span.setAttribute('context.trimmed_messages', trimmedMessages);
   }
-  return executor;
+
+  // Run the bounded tool loop. Each iteration is one LLM call; when the model
+  // asks for tools we run them, append the results, and call again.
+  const loopStartedAt = Date.now();
+  let workingMessages: ChatMessage[] = [...history, { role: 'user', content: userContent }];
+  let lastParentId: string = userMessageRow.id!;
+  let totalInput = 0;
+  let totalOutput = 0;
+  let totalCost = 0;
+  let toolSteps = 0;
+  let finalAssistantRow: MessageRow | null = null;
+
+  for (let iteration = 0; ; iteration++) {
+    // After the step budget is spent, make one last call with no tools so the
+    // model is forced to produce a text answer.
+    const offerTools =
+      toolsForLlm &&
+      iteration < MAX_TOOL_STEPS &&
+      Date.now() - loopStartedAt < MAX_LOOP_WALL_MS;
+
+    const stepStartedAt = Date.now();
+    const response = await withSpan(
+      'llm.chat',
+      () =>
+        llm.chat({
+          ...baseParams,
+          messages: workingMessages,
+          tools: offerTools ? toolsForLlm : undefined,
+        }),
+      {
+        'model.id': modelId,
+        'provider.id': provider.id,
+        'agent.id': agent.id,
+        'llm.iteration': iteration,
+      },
+    );
+    const stepLatency = Date.now() - stepStartedAt;
+    const stepCost = calculateCost(
+      model,
+      response.usage.inputTokens,
+      response.usage.outputTokens,
+    );
+    totalInput += response.usage.inputTokens;
+    totalOutput += response.usage.outputTokens;
+    totalCost += stepCost;
+
+    recordRequest({
+      provider: provider.id,
+      model: modelId,
+      status: 'success',
+      inputTokens: response.usage.inputTokens,
+      outputTokens: response.usage.outputTokens,
+      latencyMs: stepLatency,
+      costUsd: stepCost,
+    });
+
+    const toolCalls = response.toolCalls ?? [];
+    const wantsTools =
+      offerTools && response.finishReason === 'tool_use' && toolCalls.length > 0;
+
+    if (!wantsTools) {
+      // Final answer — persist it and stop.
+      finalAssistantRow = {
+        id: nanoid(),
+        sessionId,
+        role: 'assistant',
+        content: response.content,
+        tokenCount: response.usage.outputTokens,
+        modelId,
+        latencyMs: stepLatency,
+        costUsd: stepCost,
+        parentMessageId: lastParentId,
+        createdAt: new Date(),
+      };
+      await db.insert(messages).values(finalAssistantRow).run();
+      break;
+    }
+
+    // Tool step: persist the assistant message that requested the tools.
+    toolSteps++;
+    const assistantToolRow: MessageRow = {
+      id: nanoid(),
+      sessionId,
+      role: 'assistant',
+      content: response.content,
+      tokenCount: response.usage.outputTokens,
+      modelId,
+      latencyMs: stepLatency,
+      costUsd: stepCost,
+      parentMessageId: lastParentId,
+      createdAt: new Date(),
+    };
+    await db.insert(messages).values(assistantToolRow).run();
+    lastParentId = assistantToolRow.id!;
+    workingMessages = [
+      ...workingMessages,
+      { role: 'assistant', content: response.content, toolCalls },
+    ];
+
+    // Execute each requested tool and feed the results back.
+    for (const call of toolCalls) {
+      const resultText = await runToolCall(call, agentTools, {
+        sessionId,
+        agentId: agent.id,
+      });
+      const toolRow: MessageRow = {
+        id: nanoid(),
+        sessionId,
+        role: 'tool',
+        content: resultText,
+        tokenCount: countTokens(resultText, modelId),
+        modelId,
+        latencyMs: 0,
+        costUsd: 0,
+        parentMessageId: lastParentId,
+        createdAt: new Date(),
+      };
+      await db.insert(messages).values(toolRow).run();
+      lastParentId = toolRow.id!;
+      workingMessages = [
+        ...workingMessages,
+        { role: 'tool', content: resultText, toolCallId: call.id },
+      ];
+    }
+  }
+
+  // finalAssistantRow is always set: the loop only breaks after assigning it.
+  const assistantRow = finalAssistantRow!;
+  const totalTokens = totalInput + totalOutput;
+  const loopLatency = Date.now() - loopStartedAt;
+
+  span.setAttributes({
+    'agent.id': agent.id,
+    'model.id': modelId,
+    'provider.id': provider.id,
+    'cost.usd': totalCost,
+    'tokens.input': totalInput,
+    'tokens.output': totalOutput,
+    'tool.steps': toolSteps,
+    'latency.ms': loopLatency,
+  });
+
+  await recordUsage(
+    agent.id,
+    modelId,
+    { inputTokens: totalInput, outputTokens: totalOutput, totalTokens },
+    totalCost,
+    loopLatency,
+  );
+  await touchSession(session);
+
+  return {
+    userMessage: userMessageRow as Message,
+    assistantMessage: assistantRow as Message,
+    usage: { inputTokens: totalInput, outputTokens: totalOutput, totalTokens },
+    costUsd: totalCost,
+    toolSteps,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Streaming turn — single streamed LLM call, no tool loop
+// ---------------------------------------------------------------------------
+
+/**
+ * Run a user → assistant turn, streaming the reply token-by-token. This path
+ * does NOT run the tool loop — callers route tool-using agents to
+ * executeMessage. Yields delta events, then a final done event after the
+ * assistant message is persisted.
+ */
+export async function* executeMessageStream(
+  params: ExecuteMessageParams,
+): AsyncGenerator<StreamExecEvent> {
+  const { sessionId, userMessage: userContent } = params;
+  const prepared = await prepareTurn(sessionId, userContent);
+  const { session, agent, model, provider, modelId, llm, history, userMessageRow, baseParams } =
+    prepared;
+
+  const convo: ChatMessage[] = [...history, { role: 'user', content: userContent }];
+  const startedAt = Date.now();
+  let acc = '';
+  let usage: UsageInfo = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+
+  try {
+    for await (const ev of llm.streamChat({ ...baseParams, messages: convo })) {
+      if (ev.type === 'content' && ev.content) {
+        acc += ev.content;
+        yield { type: 'delta', content: ev.content };
+      } else if (ev.type === 'done' && ev.usage) {
+        usage = ev.usage;
+      } else if (ev.type === 'error') {
+        yield { type: 'error', message: ev.error ?? 'stream error' };
+        return;
+      }
+    }
+  } catch (err) {
+    yield { type: 'error', message: (err as Error).message };
+    return;
+  }
+
+  const latencyMs = Date.now() - startedAt;
+  // Some providers don't report token counts on the stream's done event.
+  if (!usage.outputTokens) {
+    const inputTokens = usage.inputTokens || 0;
+    const outputTokens = countTokens(acc, modelId);
+    usage = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
+  }
+  const costUsd = calculateCost(model, usage.inputTokens, usage.outputTokens);
+
+  const assistantRow: MessageRow = {
+    id: nanoid(),
+    sessionId,
+    role: 'assistant',
+    content: acc,
+    tokenCount: usage.outputTokens,
+    modelId,
+    latencyMs,
+    costUsd,
+    parentMessageId: userMessageRow.id ?? null,
+    createdAt: new Date(),
+  };
+  await db.insert(messages).values(assistantRow).run();
+
+  recordRequest({
+    provider: provider.id,
+    model: modelId,
+    status: 'success',
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    latencyMs,
+    costUsd,
+  });
+  await recordUsage(agent.id, modelId, usage, costUsd, latencyMs);
+  await touchSession(session);
+
+  yield { type: 'done', messageId: assistantRow.id!, usage, costUsd };
 }

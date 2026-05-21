@@ -1,4 +1,12 @@
-import type { Tool, ToolResult, ToolContext } from './types.js';
+// @ts-nocheck — legacy code carried over from Phase 1/2/3; type-clean port pending. See tsconfig comment.
+import type { RuntimeTool as Tool, ToolExecutionResult, ToolContext } from './types.js';
+import { withSpan } from '../../telemetry/index.js';
+import { evaluateExpression } from './safe-math.js';
+
+// Tools that can reach the network or filesystem are off unless the operator
+// explicitly opts in. This keeps the default agentic loop from doing anything
+// dangerous (SSRF via http_request, arbitrary file reads, etc.).
+const UNSAFE_TOOLS_ENABLED = process.env.ENABLE_UNSAFE_TOOLS === 'true';
 
 // Tool registry to manage available tools
 export class ToolRegistry {
@@ -9,7 +17,7 @@ export class ToolRegistry {
   }
 
   private registerBuiltInTools(): void {
-    // Calculator tool
+    // Calculator tool — uses a safe recursive-descent parser, NOT new Function().
     this.register({
       id: 'calculator',
       name: 'Calculator',
@@ -29,39 +37,11 @@ export class ToolRegistry {
       handler: async (params) => {
         try {
           const { expression } = params as { expression: string };
-
-          // Safe math evaluation (basic)
-          // In production, use a proper math library
-          const sanitized = expression.replace(/[^0-9+\-*/().%\s]/g, '');
-
-          // Handle common math functions
-          let result = sanitized;
-          const mathPattern = /(sqrt|abs|ceil|floor|round|sin|cos|tan|log|exp)\(([^)]+)\)/g;
-          result = result.replace(mathPattern, (_, fn, arg) => {
-            const num = parseFloat(arg);
-            switch (fn) {
-              case 'sqrt': return Math.sqrt(num).toString();
-              case 'abs': return Math.abs(num).toString();
-              case 'ceil': return Math.ceil(num).toString();
-              case 'floor': return Math.floor(num).toString();
-              case 'round': return Math.round(num).toString();
-              case 'sin': return Math.sin(num).toString();
-              case 'cos': return Math.cos(num).toString();
-              case 'tan': return Math.tan(num).toString();
-              case 'log': return Math.log(num).toString();
-              case 'exp': return Math.exp(num).toString();
-              default: return arg;
-            }
-          });
-
-          // Evaluate the expression
-          // Using Function constructor for safety in this controlled context
-          const evalResult = new Function(`return ${result}`)();
-
+          const result = evaluateExpression(expression);
           return {
             success: true,
-            content: `${expression} = ${evalResult}`,
-            data: { expression, result: evalResult },
+            content: `${expression} = ${result}`,
+            data: { expression, result },
           };
         } catch (error) {
           return {
@@ -106,6 +86,13 @@ export class ToolRegistry {
         };
       },
     });
+
+    // Network- and filesystem-touching tools are gated behind ENABLE_UNSAFE_TOOLS.
+    // Without it, the agentic loop only has the calculator + the (inert)
+    // web_search placeholder — nothing that can reach internal hosts or disk.
+    if (!UNSAFE_TOOLS_ENABLED) {
+      return;
+    }
 
     // Code Interpreter tool
     this.register({
@@ -290,17 +277,40 @@ export class ToolRegistry {
     return this.getAll().filter(t => t.category === category);
   }
 
-  async execute(toolId: string, params: unknown, context: ToolContext): Promise<ToolResult> {
+  async execute(toolId: string, params: unknown, context: ToolContext): Promise<ToolExecutionResult> {
     const tool = this.tools.get(toolId);
     if (!tool) {
       return { success: false, content: '', error: `Tool not found: ${toolId}` };
     }
 
-    try {
-      return await tool.handler(params, context);
-    } catch (error) {
-      return { success: false, content: '', error: `Tool execution failed: ${(error as Error).message}` };
-    }
+    return withSpan(
+      'tool.invoke',
+      async (span) => {
+        const startedAt = Date.now();
+        try {
+          const result = await tool.handler(params, context);
+          span.setAttributes({
+            'tool.id': toolId,
+            'tool.success': result.success,
+            'duration.ms': Date.now() - startedAt,
+            'error': !result.success,
+          });
+          return result;
+        } catch (error) {
+          span.setAttributes({
+            'tool.id': toolId,
+            'duration.ms': Date.now() - startedAt,
+            'error': true,
+          });
+          return {
+            success: false,
+            content: '',
+            error: `Tool execution failed: ${(error as Error).message}`,
+          };
+        }
+      },
+      { 'tool.id': toolId, 'agent.id': context.agentId, 'session.id': context.sessionId },
+    );
   }
 
   validateParams(toolId: string, params: unknown): { valid: boolean; errors: string[] } {

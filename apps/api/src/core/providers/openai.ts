@@ -1,7 +1,42 @@
 import OpenAI from 'openai';
-import type { ChatParams, ChatResponse, UsageInfo } from '@agentic-os/types';
+import type { ChatParams, ChatResponse, UsageInfo, ToolCall } from '@agentic-os/types';
 import type { StreamEvent } from './types.js';
 import { BaseProvider, getModelPricing } from './base.js';
+
+// Build the OpenAI message array, threading assistant tool calls and tool
+// results so a multi-step tool loop stays spec-compliant.
+function buildOpenAIMessages(params: ChatParams): OpenAI.Chat.ChatCompletionMessageParam[] {
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+  if (params.systemPrompt) {
+    messages.push({ role: 'system', content: params.systemPrompt });
+  }
+  for (const m of params.messages) {
+    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+      messages.push({
+        role: 'assistant',
+        content: m.content || null,
+        tool_calls: m.toolCalls.map((tc) => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: { name: tc.name, arguments: tc.arguments },
+        })),
+      });
+    } else if (m.role === 'tool') {
+      messages.push({
+        role: 'tool',
+        content: m.content,
+        tool_call_id: m.toolCallId ?? '',
+      });
+    } else if (m.role === 'assistant') {
+      messages.push({ role: 'assistant', content: m.content });
+    } else if (m.role === 'system') {
+      messages.push({ role: 'system', content: m.content });
+    } else {
+      messages.push({ role: 'user', content: m.content });
+    }
+  }
+  return messages;
+}
 
 export class OpenAIProvider extends BaseProvider {
   readonly providerId = 'openai';
@@ -25,14 +60,7 @@ export class OpenAIProvider extends BaseProvider {
       const response = await this.withRetry(async () => {
         return this.client.chat.completions.create({
           model: params.model || 'gpt-4o',
-          messages: [
-            ...(params.systemPrompt ? [{ role: 'system' as const, content: params.systemPrompt }] : []),
-            ...params.messages.map(m => ({
-              role: m.role as 'user' | 'assistant' | 'system',
-              content: m.content,
-              name: m.name,
-            })),
-          ],
+          messages: buildOpenAIMessages(params),
           temperature: params.temperature ?? 0.7,
           max_tokens: params.maxTokens,
           ...(params.tools && params.tools.length > 0 ? {
@@ -58,17 +86,32 @@ export class OpenAIProvider extends BaseProvider {
       const costUsd = BaseProvider.calculateCost(pricing, inputTokens, outputTokens);
 
       const choice = response.choices[0];
-      let finishReason = 'stop';
+
+      const toolCalls: ToolCall[] = (choice.message.tool_calls ?? [])
+        .filter(
+          (tc): tc is OpenAI.Chat.ChatCompletionMessageFunctionToolCall =>
+            tc.type === 'function',
+        )
+        .map((tc) => ({
+          id: tc.id,
+          name: tc.function.name,
+          arguments: tc.function.arguments,
+        }));
+
+      let finishReason: ChatResponse['finishReason'] = 'stop';
       if (choice.finish_reason === 'length') finishReason = 'length';
-      else if (choice.finish_reason === 'tool_calls') finishReason = 'tool_use';
+      else if (choice.finish_reason === 'tool_calls' || toolCalls.length > 0) {
+        finishReason = 'tool_use';
+      }
 
       return {
         content: choice.message.content || '',
-        finishReason: finishReason as 'stop' | 'length' | 'tool_use' | 'error',
+        finishReason,
         usage: { inputTokens, outputTokens, totalTokens },
         latencyMs,
         costUsd,
         raw: response,
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
       };
     } catch (error) {
       throw this.parseError(error, this.providerId);

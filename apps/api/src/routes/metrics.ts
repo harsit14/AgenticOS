@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { getMetricsSnapshot, recordRequest, recordError } from '../telemetry/index.js';
+import { getMetricsSnapshot } from '../telemetry/index.js';
 import { getUsageTracker, getBudgetAlertManager } from '../core/telemetry/usage-tracker.js';
 
 // Prometheus metrics endpoint
@@ -54,46 +54,36 @@ export async function metricsRouter(app: FastifyInstance) {
   });
 
   // Get budget status
-  app.get<{ Params: { userId: string } }>('/budget/:userId', async (request, reply) => {
+  app.get('/budget', async (request, reply) => {
     try {
-      const { userId } = request.params;
       const tracker = getUsageTracker();
-      const status = await tracker.getBudgetStatus(userId);
-
+      const status = await tracker.getBudgetStatus();
       return reply.send({ success: true, data: status });
     } catch (error) {
       request.log.error(error);
-      return reply.code(500).send({ success: false, error: { code: 'DB_ERROR', message: 'Failed to fetch budget status' } });
+      return reply.code(500).send({
+        success: false,
+        error: { code: 'DB_ERROR', message: 'Failed to fetch budget status' },
+      });
     }
   });
 
-  // Update budget alert
-  app.post<{ Params: { userId: string } }>('/budget/:userId', async (request, reply) => {
+  // Create budget alert
+  app.post('/budget', async (request, reply) => {
     try {
-      const { userId } = request.params;
       const { type, limitUsd } = request.body as { type: string; limitUsd: number };
-
       const manager = getBudgetAlertManager();
-      await manager.createAlert(userId, type as 'daily' | 'weekly' | 'monthly' | 'threshold', limitUsd);
-
+      await manager.createAlert(
+        type as 'daily' | 'weekly' | 'monthly' | 'threshold',
+        limitUsd
+      );
       return reply.code(201).send({ success: true, data: { created: true } });
     } catch (error) {
       request.log.error(error);
-      return reply.code(500).send({ success: false, error: { code: 'DB_ERROR', message: 'Failed to create budget alert' } });
-    }
-  });
-
-  // Get user gamification stats
-  app.get<{ Params: { userId: string } }>('/stats/:userId', async (request, reply) => {
-    try {
-      const { userId } = request.params;
-      const tracker = getUsageTracker();
-      const stats = await tracker.getUserStats(userId);
-
-      return reply.send({ success: true, data: stats });
-    } catch (error) {
-      request.log.error(error);
-      return reply.code(500).send({ success: false, error: { code: 'DB_ERROR', message: 'Failed to fetch user stats' } });
+      return reply.code(500).send({
+        success: false,
+        error: { code: 'DB_ERROR', message: 'Failed to create budget alert' },
+      });
     }
   });
 }

@@ -14,9 +14,12 @@ export abstract class BaseProvider implements LLMProvider {
   protected rateLimiter?: RateLimiter;
 
   constructor(config: ProviderConfig) {
-    this.apiKey = config.apiKey || process.env[`${this.providerId.toUpperCase()}_API_KEY`] || '';
-    this.timeout = config.timeout || 60000;
-    this.maxRetries = config.maxRetries || 3;
+    // API keys are supplied by the executor (via ProviderManager.configure)
+    // from the settings store, so we don't read env vars here. providerId is
+    // an abstract field initialized AFTER super() and isn't accessible here.
+    this.apiKey = config.apiKey ?? '';
+    this.timeout = config.timeout ?? 60000;
+    this.maxRetries = config.maxRetries ?? 3;
   }
 
   abstract chat(params: ChatParams): Promise<ChatResponse>;

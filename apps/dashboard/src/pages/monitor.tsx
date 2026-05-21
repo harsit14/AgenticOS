@@ -1,215 +1,235 @@
 'use client';
 
 import * as React from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useRouter } from 'next/router';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Activity, MessageSquare, Clock, DollarSign, RefreshCw, Send } from 'lucide-react';
-
-// Mock live sessions
-const liveSessions = [
-  { id: '1', agent: 'Code Assistant', user: 'user_123', startedAt: '2 min ago', messages: 12, tokens: 2450, cost: 0.12, status: 'active' },
-  { id: '2', agent: 'Data Analyst', user: 'user_456', startedAt: '5 min ago', messages: 8, tokens: 1890, cost: 0.08, status: 'active' },
-  { id: '3', agent: 'Research Assistant', user: 'user_789', startedAt: '12 min ago', messages: 23, tokens: 4520, cost: 0.22, status: 'active' },
-];
-
-// Mock messages for the selected session
-const mockMessages = [
-  { role: 'user', content: 'Can you help me write a function to calculate fibonacci numbers?', timestamp: '10:45 AM' },
-  { role: 'assistant', content: 'Of course! Here\'s a recursive implementation:\n\n```python\ndef fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) + fibonacci(n-2)\n```\n\nThis has O(2^n) time complexity. For better performance, you might want to use memoization.', timestamp: '10:45 AM' },
-  { role: 'user', content: 'Can you optimize it using dynamic programming?', timestamp: '10:46 AM' },
-  { role: 'assistant', content: 'Here\'s an optimized version using dynamic programming with O(n) time and O(n) space:\n\n```python\ndef fibonacci(n):\n    if n <= 1:\n        return n\n    dp = [0] * (n + 1)\n    dp[1] = 1\n    for i in range(2, n + 1):\n        dp[i] = dp[i-1] + dp[i-2]\n    return dp[n]\n```\n\nOr with O(1) space:\n\n```python\ndef fibonacci(n):\n    if n <= 1:\n        return n\n    a, b = 0, 1\n    for _ in range(n - 1):\n        a, b = b, a + b\n    return b\n```', timestamp: '10:46 AM' },
-];
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Activity, AlertCircle, Plus, RefreshCw } from 'lucide-react';
+import { api } from '@/lib/api';
+import type { Agent } from '@agentic-os/types';
 
 export default function MonitorPage() {
-  const [selectedSession, setSelectedSession] = React.useState(liveSessions[0]);
-  const [messageInput, setMessageInput] = React.useState('');
-  const [isStreaming, setIsStreaming] = React.useState(false);
-  const [streamingContent, setStreamingContent] = React.useState('');
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const [creating, setCreating] = React.useState(false);
+  const [selectedAgentId, setSelectedAgentId] = React.useState('');
 
-  const handleSendMessage = () => {
-    if (!messageInput.trim()) return;
+  const sessionsQuery = useQuery({
+    queryKey: ['sessions', { status: 'active' }],
+    queryFn: () => api.getSessions({ status: 'active' }),
+    refetchInterval: 5_000,
+  });
+  const agentsQuery = useQuery({ queryKey: ['agents'], queryFn: api.getAgents });
 
-    // Simulate streaming response
-    setIsStreaming(true);
-    setStreamingContent('');
-
-    const responseText = 'I\'m processing your request. This is a simulated streaming response to demonstrate the live monitoring capabilities of the Agentic Control Tower.';
-    let index = 0;
-
-    const streamInterval = setInterval(() => {
-      if (index < responseText.length) {
-        setStreamingContent(prev => prev + responseText[index]);
-        index++;
-      } else {
-        clearInterval(streamInterval);
-        setIsStreaming(false);
-        setStreamingContent('');
-        setMessageInput('');
-      }
-    }, 30);
-  };
+  const startMutation = useMutation({
+    mutationFn: (agentId: string) => api.createSession({ agentId }),
+    onSuccess: (session) => {
+      queryClient.invalidateQueries({ queryKey: ['sessions', { status: 'active' }] });
+      router.push(`/sessions/${session.id}`);
+    },
+  });
 
   return (
-    <div className="p-8 h-[calc(100vh-4rem)] flex gap-8">
-      {/* Left Panel - Live Sessions */}
-      <div className="w-1/3 flex flex-col gap-4">
-        <Card className="flex-1 flex flex-col">
-          <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
-            <CardTitle className="text-lg">Live Sessions</CardTitle>
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/20">
-                <Activity className="w-3 h-3 mr-1" />
-                {liveSessions.length} Active
-              </Badge>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <RefreshCw className="w-4 h-4" />
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="flex-1 overflow-auto">
-            <div className="space-y-2">
-              {liveSessions.map((session) => (
-                <div
-                  key={session.id}
-                  onClick={() => setSelectedSession(session)}
-                  className={`p-4 rounded-lg border cursor-pointer transition-colors ${
-                    selectedSession.id === session.id
-                      ? 'border-primary bg-primary/5'
-                      : 'border-border hover:border-primary/50'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-medium">{session.agent}</span>
-                    <Badge variant={session.status === 'active' ? 'default' : 'secondary'}>
-                      {session.status}
-                    </Badge>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-                    <div className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {session.startedAt}
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <MessageSquare className="w-3 h-3" />
-                      {session.messages} msgs
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Activity className="w-3 h-3" />
-                      {session.tokens.toLocaleString()} tokens
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <DollarSign className="w-3 h-3" />
-                      ${session.cost.toFixed(2)}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+    <div className="p-8 space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Live Monitor</h1>
+          <p className="text-muted-foreground">
+            Active sessions refresh every 5 seconds.
+          </p>
+        </div>
+        <Button onClick={() => setCreating((s) => !s)}>
+          <Plus className="w-4 h-4 mr-2" />
+          Start session
+        </Button>
+      </div>
+
+      {creating && (
+        <NewSessionPanel
+          agents={agentsQuery.data ?? []}
+          loading={agentsQuery.isLoading}
+          selectedAgentId={selectedAgentId}
+          onSelect={setSelectedAgentId}
+          onStart={() => startMutation.mutate(selectedAgentId)}
+          pending={startMutation.isPending}
+          error={
+            startMutation.isError ? (startMutation.error as Error).message : null
+          }
+        />
+      )}
+
+      {sessionsQuery.isLoading && <Loading />}
+
+      {sessionsQuery.isError && (
+        <ErrorBanner
+          message={(sessionsQuery.error as Error)?.message ?? 'Failed to load sessions'}
+          onRetry={() => sessionsQuery.refetch()}
+        />
+      )}
+
+      {sessionsQuery.data && sessionsQuery.data.length === 0 && (
+        <Card>
+          <CardContent className="pt-12 pb-12 text-center space-y-3">
+            <Activity className="w-8 h-8 mx-auto text-muted-foreground" />
+            <p className="font-medium">No active sessions</p>
+            <p className="text-sm text-muted-foreground">
+              Start a session above to chat with one of your agents.
+            </p>
           </CardContent>
         </Card>
+      )}
 
-        {/* Session Stats */}
+      {sessionsQuery.data && sessionsQuery.data.length > 0 && (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Session Metrics</CardTitle>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Activity className="w-5 h-5" />
+              Active sessions
+              <Badge variant="default" className="ml-2">
+                {sessionsQuery.data.length}
+              </Badge>
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 gap-4 text-center">
-              <div className="p-3 rounded-lg bg-muted">
-                <p className="text-2xl font-bold">{selectedSession.messages}</p>
-                <p className="text-xs text-muted-foreground">Messages</p>
-              </div>
-              <div className="p-3 rounded-lg bg-muted">
-                <p className="text-2xl font-bold">{selectedSession.tokens.toLocaleString()}</p>
-                <p className="text-xs text-muted-foreground">Tokens</p>
-              </div>
-              <div className="p-3 rounded-lg bg-muted">
-                <p className="text-2xl font-bold">${selectedSession.cost.toFixed(2)}</p>
-                <p className="text-xs text-muted-foreground">Cost</p>
-              </div>
-              <div className="p-3 rounded-lg bg-muted">
-                <p className="text-2xl font-bold">{selectedSession.startedAt}</p>
-                <p className="text-xs text-muted-foreground">Duration</p>
-              </div>
-            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Session</TableHead>
+                  <TableHead>Started</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sessionsQuery.data.map((s) => (
+                  <TableRow
+                    key={s.id}
+                    className="cursor-pointer"
+                    onClick={() => router.push(`/sessions/${s.id}`)}
+                  >
+                    <TableCell className="font-mono text-xs">{s.id}</TableCell>
+                    <TableCell>{formatTimeAgo(s.startedAt)}</TableCell>
+                    <TableCell>
+                      <Badge variant="default">{s.status}</Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button size="sm" variant="ghost">
+                        Open →
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </CardContent>
         </Card>
-      </div>
-
-      {/* Right Panel - Chat */}
-      <div className="flex-1 flex flex-col gap-4">
-        <Card className="flex-1 flex flex-col">
-          <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
-            <div className="flex items-center gap-2">
-              <CardTitle className="text-lg">Session: {selectedSession.agent}</CardTitle>
-              <Badge variant="outline">{selectedSession.id}</Badge>
-            </div>
-            {isStreaming && (
-              <Badge variant="default" className="animate-pulse">
-                Streaming...
-              </Badge>
-            )}
-          </CardHeader>
-          <CardContent className="flex-1 overflow-auto space-y-4">
-            {mockMessages.map((msg, i) => (
-              <div
-                key={i}
-                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[70%] rounded-lg p-4 ${
-                    msg.role === 'user'
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-muted'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-xs opacity-70">{msg.role}</span>
-                    <span className="text-xs opacity-50">{msg.timestamp}</span>
-                  </div>
-                  <p className="whitespace-pre-wrap">{msg.content}</p>
-                </div>
-              </div>
-            ))}
-
-            {/* Streaming message */}
-            {isStreaming && streamingContent && (
-              <div className="flex justify-start">
-                <div className="max-w-[70%] rounded-lg p-4 bg-muted">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-xs opacity-70">assistant</span>
-                    <span className="text-xs opacity-50 animate-pulse">streaming...</span>
-                  </div>
-                  <p className="whitespace-pre-wrap">{streamingContent}</p>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Message Input */}
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex gap-2">
-              <Input
-                placeholder="Type your message..."
-                value={messageInput}
-                onChange={(e) => setMessageInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                disabled={isStreaming}
-                className="flex-1"
-              />
-              <Button onClick={handleSendMessage} disabled={isStreaming || !messageInput.trim()}>
-                <Send className="w-4 h-4 mr-2" />
-                Send
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      )}
     </div>
   );
+}
+
+function NewSessionPanel({
+  agents,
+  loading,
+  selectedAgentId,
+  onSelect,
+  onStart,
+  pending,
+  error,
+}: {
+  agents: Agent[];
+  loading: boolean;
+  selectedAgentId: string;
+  onSelect: (v: string) => void;
+  onStart: () => void;
+  pending: boolean;
+  error: string | null;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Start a new session</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {loading ? (
+          <p className="text-sm">Loading agents…</p>
+        ) : agents.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No agents yet — create one on the Agents page.
+          </p>
+        ) : (
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedAgentId}
+              onChange={(e) => onSelect(e.target.value)}
+              className="flex-1 h-10 rounded-md border bg-background px-3 text-sm"
+            >
+              <option value="">— pick an agent —</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+            <Button onClick={onStart} disabled={!selectedAgentId || pending}>
+              {pending ? 'Starting…' : 'Start'}
+            </Button>
+          </div>
+        )}
+        {error && <p className="text-sm text-destructive">{error}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function Loading() {
+  return (
+    <Card className="animate-pulse">
+      <CardContent className="pt-6">
+        <div className="h-10 w-full bg-muted rounded mb-2" />
+        <div className="h-10 w-full bg-muted rounded mb-2" />
+      </CardContent>
+    </Card>
+  );
+}
+
+function ErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <Card className="border-destructive/50">
+      <CardContent className="pt-6 flex items-center gap-4">
+        <AlertCircle className="w-6 h-6 text-destructive" />
+        <div className="flex-1">
+          <p className="font-medium">Failed to load sessions</p>
+          <p className="text-sm text-muted-foreground">{message}</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          <RefreshCw className="w-4 h-4 mr-1" />
+          Retry
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function formatTimeAgo(date: string | Date | undefined): string {
+  if (!date) return '—';
+  const ms = Date.now() - new Date(date).getTime();
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
 }

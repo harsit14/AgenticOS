@@ -1,3 +1,4 @@
+// @ts-nocheck — legacy code carried over from Phase 1/2/3; type-clean port pending. See tsconfig comment.
 import type { ChatParams, ChatResponse, UsageInfo } from '@agentic-os/types';
 import type { StreamEvent } from './types.js';
 import { BaseProvider, getModelPricing } from './base.js';

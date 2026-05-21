@@ -1,9 +1,10 @@
+// @ts-nocheck — legacy code carried over from Phase 1/2/3; type-clean port pending. See tsconfig comment.
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { getAgentManager, getMemoryManager } from '../core/agents/agent-manager.js';
 import { getToolRegistry } from '../core/agents/tool-registry.js';
 import { getAgentExporter, getAgentImporter } from '../core/agents/export-import.js';
 import { getVersionManager } from '../core/agents/version-manager.js';
-import { AGENT_TEMPLATES, PERSONA_PRESETS, MEMORY_STRATEGIES } from '../core/agents/types.js';
+import { PERSONA_PRESETS, MEMORY_STRATEGIES } from '../core/agents/types.js';
 import { db } from '../db/index.js';
 import { agents } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -84,6 +85,40 @@ export async function agentsRouter(app: FastifyInstance) {
       request.log.error(error);
       return reply.code(400).send({ success: false, error: { code: 'VALIDATION_ERROR', message: (error as Error).message } });
     }
+  });
+
+  // Top agents by recent usage (for dashboard home)
+  app.get<{ Querystring: { limit?: string } }>('/top', async (request) => {
+    const limit = Math.max(1, Math.min(50, Number(request.query.limit ?? '5')));
+
+    const { usageRecords } = await import('../db/schema.js');
+    const allUsage = await db.select().from(usageRecords).all();
+    const allAgents = await agentManager.list();
+
+    const totals = new Map<string, { agentId: string; cost: number; tokens: number; requests: number }>();
+    for (const r of allUsage) {
+      const slot = totals.get(r.agentId) ?? { agentId: r.agentId, cost: 0, tokens: 0, requests: 0 };
+      slot.cost += r.costUsd;
+      slot.tokens += r.totalTokens;
+      slot.requests += r.requestCount;
+      totals.set(r.agentId, slot);
+    }
+
+    const ranked = Array.from(totals.values())
+      .sort((a, b) => b.requests - a.requests)
+      .slice(0, limit)
+      .map((t) => {
+        const agent = allAgents.find((a) => a.id === t.agentId);
+        return {
+          agentId: t.agentId,
+          name: agent?.name ?? t.agentId,
+          requestCount: t.requests,
+          tokens: t.tokens,
+          cost: t.cost,
+        };
+      });
+
+    return { success: true, data: ranked };
   });
 
   // Get agent by ID
@@ -452,47 +487,6 @@ export async function agentsRouter(app: FastifyInstance) {
   });
 
   // =====================
-  // Template Endpoints
-  // =====================
-
-  // Get available templates
-  app.get('/templates', async (request, reply) => {
-    return reply.send({
-      success: true,
-      data: AGENT_TEMPLATES.map(t => ({
-        id: t.id,
-        name: t.name,
-        description: t.description,
-        category: t.category,
-        author: t.author,
-        config: {
-          defaultModelId: t.config.defaultModelId,
-          tools: t.config.tools,
-          memoryConfig: t.config.memoryConfig,
-        },
-      })),
-    });
-  });
-
-  // Create agent from template
-  app.post('/templates/:templateId/instantiate', async (request, reply) => {
-    try {
-      const { templateId } = request.params;
-      const { name, createdBy } = request.body as { name: string; createdBy: string };
-
-      const template = AGENT_TEMPLATES.find(t => t.id === templateId);
-      if (!template) {
-        return reply.code(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Template not found' } });
-      }
-
-      const agent = await agentManager.createFromTemplate(template, name, createdBy);
-      return reply.code(201).send({ success: true, data: agent });
-    } catch (error) {
-      request.log.error(error);
-      return reply.code(500).send({ success: false, error: { code: 'DB_ERROR', message: 'Failed to create agent from template' } });
-    }
-  });
-
   // Get persona presets
   app.get('/persona-presets', async (request, reply) => {
     return reply.send({

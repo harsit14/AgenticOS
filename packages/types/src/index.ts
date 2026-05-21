@@ -13,10 +13,6 @@ export type BudgetAlertType = 'daily' | 'weekly' | 'monthly' | 'threshold';
 
 export type BudgetAlertStatus = 'active' | 'triggered' | 'disabled';
 
-export type PipelineStatus = 'draft' | 'active' | 'paused';
-
-export type PipelineNodeType = 'agent' | 'condition' | 'input' | 'output' | 'delay' | 'merge' | 'split';
-
 export interface Provider {
   id: string;
   name: string;
@@ -52,13 +48,28 @@ export interface AgentPersona {
   knowledgeBases: string[];
 }
 
-export interface ToolDefinition {
+export interface Tool {
   id: string;
   name: string;
   description: string;
   parameters: Record<string, unknown>;
   requiresApproval: boolean;
   rateLimit?: number;
+}
+
+// Backwards-compatible alias; prefer `Tool` going forward.
+export type ToolDefinition = Tool;
+
+export interface ToolCall {
+  id: string; // provider-assigned id; tool results reference it
+  name: string;
+  arguments: string; // JSON string
+}
+
+export interface ToolResult {
+  name: string;
+  content: string;
+  isError?: boolean;
 }
 
 export interface AgentMemoryConfig {
@@ -86,7 +97,6 @@ export interface Agent {
 export interface Session {
   id: string;
   agentId: string;
-  userId: string;
   modelId: string;
   status: SessionStatus;
   startedAt: Date;
@@ -109,7 +119,6 @@ export interface Message {
 
 export interface UsageRecord {
   id: string;
-  userId: string;
   agentId: string;
   modelId: string;
   date: string;
@@ -124,7 +133,6 @@ export interface UsageRecord {
 
 export interface BudgetAlert {
   id: string;
-  userId: string;
   type: BudgetAlertType;
   limitUsd: number;
   currentSpend: number;
@@ -138,6 +146,10 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   name?: string;
+  // Set on an assistant message that requested tool calls.
+  toolCalls?: ToolCall[];
+  // Set on a tool-role message; references the ToolCall.id it answers.
+  toolCallId?: string;
 }
 
 export interface ChatParams {
@@ -163,140 +175,38 @@ export interface ChatResponse {
   latencyMs: number;
   costUsd: number;
   raw: unknown;
+  // Populated when finishReason === 'tool_use' — the tool calls the model wants run.
+  toolCalls?: ToolCall[];
 }
 
+// High-level stream event covering both the legacy union shape and the
+// discriminated variants in StreamEventType.
 export interface StreamEvent {
   type: 'content' | 'done' | 'error';
   content?: string;
   usage?: UsageInfo;
-}
-
-// Pipeline types
-
-export interface PipelineNode {
-  id: string;
-  type: PipelineNodeType;
-  position: { x: number; y: number };
-  config: Record<string, unknown>;
-  inputs: string[];
-  outputs: string[];
-}
-
-export interface PipelineEdge {
-  id: string;
-  sourceId: string;
-  targetId: string;
-  type: 'data' | 'control';
-}
-
-export interface Pipeline {
-  id: string;
-  name: string;
-  description?: string;
-  nodes: PipelineNode[];
-  edges: PipelineEdge[];
-  createdBy: string;
-  status: PipelineStatus;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-// Pipeline Execution types
-
-export type ExecutionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
-export type NodeExecutionStatus = 'idle' | 'running' | 'success' | 'error' | 'skipped';
-
-export interface PipelineExecution {
-  id: string;
-  pipelineId: string;
-  status: ExecutionStatus;
-  startedAt: Date;
-  endedAt?: Date;
-  triggerType: 'manual' | 'scheduled' | 'api' | 'webhook';
-  input: Record<string, unknown>;
-  output?: Record<string, unknown>;
+  finishReason?: string;
   error?: string;
 }
 
-export interface NodeExecution {
-  id: string;
-  executionId: string;
-  nodeId: string;
-  status: NodeExecutionStatus;
-  startedAt: Date;
-  endedAt?: Date;
-  input: unknown;
-  output?: unknown;
-  error?: string;
-  latencyMs: number;
+// Discriminated stream event used by provider implementations
+export interface ContentDeltaEvent {
+  type: 'content';
+  content: string;
 }
 
-// Condition node types
-export type ConditionOperator = 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'not_contains';
-
-export interface ConditionConfig {
-  field: string;
-  operator: ConditionOperator;
-  value: unknown;
+export interface DoneStreamEvent {
+  type: 'done';
+  usage: UsageInfo;
+  finishReason: string;
 }
 
-export interface DelayConfig {
-  durationMs: number;
+export interface ErrorStreamEvent {
+  type: 'error';
+  error: string;
 }
 
-export interface MergeConfig {
-  strategy: 'all' | 'first' | 'fail_fast';
-}
-
-export interface SplitConfig {
-  branches: string[];
-}
-
-// Agent template for marketplace
-
-export interface AgentTemplate {
-  id: string;
-  name: string;
-  description: string;
-  category: string[];
-  authorId: string;
-  authorName: string;
-  rating: number;
-  installCount: number;
-  config: Partial<Agent>;
-  preview?: {
-    avatar?: string;
-    sampleConversation: ChatMessage[];
-  };
-  tags: string[];
-  isPublic: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-// Gamification types
-
-export interface Badge {
-  id: string;
-  name: string;
-  description: string;
-  icon: string;
-  criteria: {
-    type: 'tokens_saved' | 'cost_reduction' | 'streak' | 'tasks_completed';
-    threshold: number;
-  };
-}
-
-export interface UserStats {
-  userId: string;
-  totalTokensSaved: number;
-  totalCostSaved: number;
-  currentStreak: number;
-  longestStreak: number;
-  tasksCompleted: number;
-  badges: string[];
-  updatedAt: Date;
-}
+export type StreamEventType = ContentDeltaEvent | DoneStreamEvent | ErrorStreamEvent;
 
 // API Response types
 
@@ -346,9 +256,10 @@ export interface LiveSession {
   id: string;
   agentId: string;
   agentName: string;
-  userId: string;
   startedAt: Date;
   messages: number;
   tokensUsed: number;
   costSoFar: number;
 }
+
+export * from './context.js';

@@ -1,15 +1,12 @@
 // Tool registry API for dashboard
+import type { Tool } from '@agentic-os/types';
+
+export type { Tool };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
-export interface Tool {
-  id: string;
-  name: string;
-  description: string;
-  category: string;
-  parameters: Record<string, unknown>;
-  requiresApproval: boolean;
-}
+// The agent tools endpoint also exposes a runtime-only `category` field.
+export type DashboardTool = Tool & { category?: string };
 
 export interface PersonaPreset {
   id: string;
@@ -27,22 +24,6 @@ export interface MemoryStrategy {
   defaultMaxMessages: number;
 }
 
-export interface AgentTemplate {
-  id: string;
-  name: string;
-  description: string;
-  category: string[];
-  author: string;
-  config: {
-    defaultModelId: string;
-    tools: string[];
-    memoryConfig: {
-      strategy: string;
-      maxMessages: number;
-    };
-  };
-}
-
 async function fetchApi<T>(endpoint: string): Promise<T> {
   const res = await fetch(`${API_URL}${endpoint}`);
   if (!res.ok) {
@@ -52,9 +33,9 @@ async function fetchApi<T>(endpoint: string): Promise<T> {
   return json.data ?? json;
 }
 
-export async function getTools(): Promise<Tool[]> {
+export async function getTools(): Promise<DashboardTool[]> {
   try {
-    return await fetchApi<Tool[]>('/api/agents/tools');
+    return await fetchApi<DashboardTool[]>('/api/agents/tools');
   } catch {
     return [];
   }
@@ -71,14 +52,6 @@ export async function getPersonaPresets(): Promise<PersonaPreset[]> {
 export async function getMemoryStrategies(): Promise<MemoryStrategy[]> {
   try {
     return await fetchApi<MemoryStrategy[]>('/api/agents/memory-strategies');
-  } catch {
-    return [];
-  }
-}
-
-export async function getAgentTemplates(): Promise<AgentTemplate[]> {
-  try {
-    return await fetchApi<AgentTemplate[]>('/api/agents/templates');
   } catch {
     return [];
   }

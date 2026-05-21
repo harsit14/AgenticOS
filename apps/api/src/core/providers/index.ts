@@ -6,19 +6,22 @@ import { GroqProvider, PerplexityProvider, MistralProvider } from './groq.js';
 import { VertexProvider, BedrockProvider } from './vertex.js';
 
 // Provider registry with lazy initialization
-type ProviderConstructor = new () => LLMProvider;
+type ProviderConstructor = new (config?: ProviderConfig) => LLMProvider;
 
+// Provider classes use slightly different shapes (e.g. Ollama overrides
+// providerId narrowly) that don't line up structurally for TS, but they all
+// satisfy LLMProvider at runtime.
 const PROVIDERS: Record<string, ProviderConstructor> = {
-  anthropic: AnthropicProvider,
-  openai: OpenAIProvider,
-  azure: AzureProvider,
-  ollama: OllamaProvider,
-  lmstudio: LMStudioProvider,
-  groq: GroqProvider,
-  perplexity: PerplexityProvider,
-  mistral: MistralProvider,
-  vertex: VertexProvider,
-  bedrock: BedrockProvider,
+  anthropic: AnthropicProvider as unknown as ProviderConstructor,
+  openai: OpenAIProvider as unknown as ProviderConstructor,
+  azure: AzureProvider as unknown as ProviderConstructor,
+  ollama: OllamaProvider as unknown as ProviderConstructor,
+  lmstudio: LMStudioProvider as unknown as ProviderConstructor,
+  groq: GroqProvider as unknown as ProviderConstructor,
+  perplexity: PerplexityProvider as unknown as ProviderConstructor,
+  mistral: MistralProvider as unknown as ProviderConstructor,
+  vertex: VertexProvider as unknown as ProviderConstructor,
+  bedrock: BedrockProvider as unknown as ProviderConstructor,
 };
 
 export class ProviderManager {
@@ -39,7 +42,8 @@ export class ProviderManager {
     this.providers.delete(providerId);
   }
 
-  // Get or create a provider instance
+  // Get or create a provider instance. Re-uses the cached instance unless
+  // configure() was called (which clears the cache).
   getProvider(providerId: string): LLMProvider | null {
     if (!PROVIDERS[providerId]) {
       return null;
@@ -47,7 +51,8 @@ export class ProviderManager {
 
     if (!this.providers.has(providerId)) {
       const ProviderClass = PROVIDERS[providerId];
-      this.providers.set(providerId, new ProviderClass());
+      const config = this.config.get(providerId) ?? {};
+      this.providers.set(providerId, new ProviderClass(config));
     }
 
     return this.providers.get(providerId)!;

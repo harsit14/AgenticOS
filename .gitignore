@@ -13,9 +13,12 @@ build
 .env.local
 .env.*.local
 
-# Database
+# Database / local data (includes the at-rest encryption keyfile)
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
+apps/api/data
 
 # Logs
 logs
@@ -42,3 +45,7 @@ docker/data
 # Misc
 *.tsbuildinfo
 .nyc_output
+
+# Local tooling (Claude Code worktrees + local settings)
+.claude
+.claire

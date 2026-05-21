@@ -15,7 +15,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "lint": "eslint src",
-    "test": "vitest",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
@@ -23,6 +24,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@agentic-os/types": "workspace:*",
     "@ai-sdk/openai": "^0.0.72",
     "@anthropic-ai/sdk": "^0.30.0",
     "@aws-sdk/client-bedrock-runtime": "^3.600.0",
@@ -39,6 +41,7 @@
     "@opentelemetry/resources": "^2.7.1",
     "@opentelemetry/sdk-metrics": "^2.7.1",
     "@opentelemetry/sdk-node": "^0.52.0",
+    "@opentelemetry/sdk-trace-base": "^1.25.0",
     "@opentelemetry/sdk-trace-node": "^1.25.0",
     "@opentelemetry/semantic-conventions": "^1.25.0",
     "ai": "^3.0.0",
@@ -57,7 +60,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.10",
     "@types/node": "^20.0.0",
-    "drizzle-kit": "^0.24.0",
+    "drizzle-kit": "^0.24.2",
     "eslint": "^9.0.0",
     "tsx": "^4.16.0",
     "typescript": "^5.5.0",

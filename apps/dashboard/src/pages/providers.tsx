@@ -1,193 +1,226 @@
 'use client';
 
 import * as React from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Progress } from '@/components/ui/progress';
-import { Check, X, Settings, RefreshCw, Plus } from 'lucide-react';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { AlertCircle, CheckCircle2, Loader2, RefreshCw, Settings as SettingsIcon } from 'lucide-react';
+import Link from 'next/link';
+import { api, type TestProviderResult } from '@/lib/api';
 
-// Mock provider data
-const providers = [
-  { id: 'anthropic', name: 'Anthropic', displayName: 'Anthropic', models: 4, status: 'active', configured: true },
-  { id: 'openai', name: 'OpenAI', displayName: 'OpenAI', models: 4, status: 'active', configured: true },
-  { id: 'vertex', name: 'vertex', displayName: 'Google Vertex AI', models: 3, status: 'active', configured: true },
-  { id: 'bedrock', name: 'bedrock', displayName: 'AWS Bedrock', models: 3, status: 'inactive', configured: false },
-  { id: 'ollama', name: 'ollama', displayName: 'Ollama (Local)', models: 4, status: 'active', configured: true },
-  { id: 'lmstudio', name: 'lmstudio', displayName: 'LM Studio (Local)', models: 2, status: 'active', configured: true },
-  { id: 'groq', name: 'groq', displayName: 'Groq', models: 2, status: 'active', configured: true },
-  { id: 'mistral', name: 'mistral', displayName: 'Mistral AI', models: 3, status: 'inactive', configured: false },
-];
-
-// Mock model data
-const models = [
-  { id: 'claude-3-5-sonnet', provider: 'Anthropic', name: 'Claude 3.5 Sonnet', contextWindow: '200K', inputCost: 3, outputCost: 15, status: 'active', capabilities: ['streaming', 'vision', 'function_calling'] },
-  { id: 'claude-3-5-haiku', provider: 'Anthropic', name: 'Claude 3.5 Haiku', contextWindow: '200K', inputCost: 0.8, outputCost: 4, status: 'active', capabilities: ['streaming', 'vision', 'function_calling'] },
-  { id: 'gpt-4o', provider: 'OpenAI', name: 'GPT-4o', contextWindow: '128K', inputCost: 5, outputCost: 15, status: 'active', capabilities: ['streaming', 'vision', 'function_calling'] },
-  { id: 'gpt-4o-mini', provider: 'OpenAI', name: 'GPT-4o Mini', contextWindow: '128K', inputCost: 0.15, outputCost: 0.6, status: 'active', capabilities: ['streaming', 'vision', 'function_calling'] },
-  { id: 'gemini-1.5-pro', provider: 'Vertex AI', name: 'Gemini 1.5 Pro', contextWindow: '1M', inputCost: 1.25, outputCost: 5, status: 'active', capabilities: ['streaming', 'vision', 'function_calling'] },
-  { id: 'gemini-1.5-flash', provider: 'Vertex AI', name: 'Gemini 1.5 Flash', contextWindow: '1M', inputCost: 0.075, outputCost: 0.3, status: 'active', capabilities: ['streaming', 'vision', 'function_calling'] },
-  { id: 'llama3', provider: 'Ollama', name: 'Llama 3', contextWindow: '8K', inputCost: 0, outputCost: 0, status: 'active', capabilities: ['streaming'] },
-  { id: 'codellama', provider: 'Ollama', name: 'Code Llama', contextWindow: '8K', inputCost: 0, outputCost: 0, status: 'beta', capabilities: ['streaming'] },
-];
+type SettingsResponse = {
+  default_model_id?: string;
+  provider_api_keys?: Record<string, string>;
+};
 
 export default function ProvidersPage() {
-  const [selectedProvider, setSelectedProvider] = React.useState(providers[0]);
+  const providersQuery = useQuery({ queryKey: ['providers'], queryFn: api.getProviders });
+  const modelsQuery = useQuery({ queryKey: ['models'], queryFn: api.getModels });
+  const settingsQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.getSettings() as Promise<SettingsResponse>,
+  });
+
+  const [testResults, setTestResults] = React.useState<Record<string, TestProviderResult | 'pending'>>({});
+
+  const testMutation = useMutation({
+    mutationFn: (providerId: string) => api.testProvider(providerId),
+    onMutate: (providerId) => {
+      setTestResults((prev) => ({ ...prev, [providerId]: 'pending' }));
+    },
+    onSuccess: (data, providerId) => {
+      setTestResults((prev) => ({ ...prev, [providerId]: data }));
+    },
+    onError: (err, providerId) => {
+      setTestResults((prev) => ({
+        ...prev,
+        [providerId]: { ok: false, error: (err as Error).message },
+      }));
+    },
+  });
+
+  const configuredKeys = settingsQuery.data?.provider_api_keys ?? {};
 
   return (
     <div className="p-8 space-y-8">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Providers & Models</h1>
-          <p className="text-muted-foreground">Manage LLM providers and model configurations</p>
-        </div>
-        <Button>
-          <Plus className="w-4 h-4 mr-2" />
-          Add Provider
-        </Button>
+      <div>
+        <h1 className="text-3xl font-bold">Providers</h1>
+        <p className="text-muted-foreground">
+          Configure API keys on the Settings page; test connections here.
+        </p>
       </div>
 
-      {/* Provider Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {providers.map((provider) => (
-          <Card
-            key={provider.id}
-            className={`cursor-pointer transition-colors ${
-              selectedProvider.id === provider.id ? 'border-primary' : ''
-            }`}
-            onClick={() => setSelectedProvider(provider)}
-          >
-            <CardContent className="pt-4">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="font-medium">{provider.displayName}</h3>
-                {provider.configured ? (
-                  <Badge variant="default" className="text-xs">
-                    <Check className="w-3 h-3 mr-1" />
-                    Configured
-                  </Badge>
-                ) : (
-                  <Badge variant="outline" className="text-xs">
-                    <X className="w-3 h-3 mr-1" />
-                    Not Set
-                  </Badge>
-                )}
-              </div>
-              <p className="text-sm text-muted-foreground mb-3">{provider.models} models</p>
-              <div className="flex items-center justify-between">
-                <Badge variant={provider.status === 'active' ? 'default' : 'secondary'}>
-                  {provider.status}
-                </Badge>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
-                  <Settings className="w-4 h-4" />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {providersQuery.isLoading && <ProvidersLoading />}
+      {providersQuery.isError && (
+        <ProvidersError
+          message={(providersQuery.error as Error)?.message ?? 'Failed to load providers'}
+          onRetry={() => providersQuery.refetch()}
+        />
+      )}
 
-      {/* Model Table */}
-      <Card>
-        <CardHeader className="flex-row items-center justify-between">
-          <CardTitle>Model Catalog</CardTitle>
-          <Button variant="outline" size="sm">
-            <RefreshCw className="w-4 h-4 mr-2" />
-            Refresh Models
-          </Button>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Model</TableHead>
-                <TableHead>Provider</TableHead>
-                <TableHead>Context Window</TableHead>
-                <TableHead>Input ($/M)</TableHead>
-                <TableHead>Output ($/M)</TableHead>
-                <TableHead>Capabilities</TableHead>
-                <TableHead>Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {models.map((model) => (
-                <TableRow key={model.id}>
-                  <TableCell className="font-medium">{model.name}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline">{model.provider}</Badge>
-                  </TableCell>
-                  <TableCell>{model.contextWindow}</TableCell>
-                  <TableCell>${model.inputCost}</TableCell>
-                  <TableCell>${model.outputCost}</TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      {model.capabilities.map((cap) => (
-                        <Badge key={cap} variant="secondary" className="text-xs">
-                          {cap}
-                        </Badge>
-                      ))}
+      {providersQuery.data && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {providersQuery.data.map((p) => {
+            const configured = !!configuredKeys[p.id];
+            const test = testResults[p.id];
+            return (
+              <Card key={p.id}>
+                <CardHeader className="flex flex-row items-start justify-between space-y-0">
+                  <div className="space-y-1">
+                    <CardTitle className="text-base">{p.displayName}</CardTitle>
+                    <p className="text-xs text-muted-foreground">{p.baseUrl}</p>
+                  </div>
+                  {p.isLocal ? (
+                    <Badge variant="secondary">Local</Badge>
+                  ) : configured ? (
+                    <Badge variant="default">Configured</Badge>
+                  ) : (
+                    <Badge variant="outline">Not configured</Badge>
+                  )}
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => testMutation.mutate(p.id)}
+                    disabled={(!configured && !p.isLocal) || test === 'pending'}
+                    className="w-full"
+                  >
+                    {test === 'pending' ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                        Testing…
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-4 h-4 mr-1" />
+                        Test connection
+                      </>
+                    )}
+                  </Button>
+                  {test && test !== 'pending' && (
+                    <div
+                      className={`flex items-start gap-2 text-sm rounded-md p-2 ${
+                        test.ok
+                          ? 'bg-green-500/10 text-green-600 dark:text-green-400'
+                          : 'bg-destructive/10 text-destructive'
+                      }`}
+                    >
+                      {test.ok ? (
+                        <>
+                          <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
+                          <span>
+                            OK — {test.latencyMs}ms, {test.inputTokens ?? 0}+
+                            {test.outputTokens ?? 0} tok
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                          <span className="break-words">{test.error}</span>
+                        </>
+                      )}
                     </div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={model.status === 'active' ? 'default' : 'secondary'}>
-                      {model.status}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+                  )}
+                  {!configured && !p.isLocal && (
+                    <Link
+                      href="/settings"
+                      className="text-sm text-muted-foreground inline-flex items-center hover:underline"
+                    >
+                      <SettingsIcon className="w-4 h-4 mr-1" />
+                      Add API key on Settings →
+                    </Link>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
 
-      {/* Selected Provider Details */}
       <Card>
         <CardHeader>
-          <CardTitle>Provider: {selectedProvider.displayName}</CardTitle>
+          <CardTitle>Models</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-4">
-              <div className="flex justify-between items-center p-4 rounded-lg bg-muted">
-                <span className="text-muted-foreground">API Endpoint</span>
-                <span className="font-mono text-sm">{selectedProvider.id === 'ollama' ? 'http://localhost:11434' : 'https://api...'}</span>
-              </div>
-              <div className="flex justify-between items-center p-4 rounded-lg bg-muted">
-                <span className="text-muted-foreground">Status</span>
-                <Badge variant={selectedProvider.status === 'active' ? 'default' : 'secondary'}>
-                  {selectedProvider.status}
-                </Badge>
-              </div>
-              <div className="flex justify-between items-center p-4 rounded-lg bg-muted">
-                <span className="text-muted-foreground">Models Available</span>
-                <span className="font-bold">{selectedProvider.models}</span>
-              </div>
-            </div>
-            <div className="space-y-4">
-              <div className="p-4 rounded-lg border space-y-2">
-                <h4 className="font-medium">Rate Limits</h4>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Requests/min</span>
-                  <span>50</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Tokens/min</span>
-                  <span>100,000</span>
-                </div>
-              </div>
-              <div className="p-4 rounded-lg border space-y-2">
-                <h4 className="font-medium">Usage This Month</h4>
-                <Progress value={45} className="h-2" />
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">45% of limit</span>
-                  <span>$45.60</span>
-                </div>
-              </div>
-            </div>
-          </div>
+          {modelsQuery.isLoading && <p className="text-sm">Loading models…</p>}
+          {modelsQuery.isError && (
+            <p className="text-sm text-destructive">Failed to load models</p>
+          )}
+          {modelsQuery.data && modelsQuery.data.length === 0 && (
+            <p className="text-sm text-muted-foreground">No models registered.</p>
+          )}
+          {modelsQuery.data && modelsQuery.data.length > 0 && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Model</TableHead>
+                  <TableHead>Provider</TableHead>
+                  <TableHead>Context</TableHead>
+                  <TableHead>Input $/M</TableHead>
+                  <TableHead>Output $/M</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {modelsQuery.data.map((m) => (
+                  <TableRow key={m.id}>
+                    <TableCell className="font-medium">{m.displayName}</TableCell>
+                    <TableCell className="text-muted-foreground">{m.providerId}</TableCell>
+                    <TableCell>{m.contextWindow.toLocaleString()}</TableCell>
+                    <TableCell>${m.inputCostPer1M.toFixed(2)}</TableCell>
+                    <TableCell>${m.outputCostPer1M.toFixed(2)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function ProvidersLoading() {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {[0, 1, 2, 3, 4, 5].map((i) => (
+        <Card key={i} className="animate-pulse">
+          <CardHeader>
+            <div className="h-5 w-32 bg-muted rounded" />
+            <div className="h-3 w-40 bg-muted rounded mt-2" />
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="h-8 w-full bg-muted rounded" />
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function ProvidersError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <Card className="border-destructive/50">
+      <CardContent className="pt-6 flex items-center gap-4">
+        <AlertCircle className="w-6 h-6 text-destructive" />
+        <div className="flex-1">
+          <p className="font-medium">Failed to load providers</p>
+          <p className="text-sm text-muted-foreground">{message}</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          <RefreshCw className="w-4 h-4 mr-1" />
+          Retry
+        </Button>
+      </CardContent>
+    </Card>
   );
 }

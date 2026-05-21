@@ -136,7 +136,7 @@ export function getMemoryPressureColor(level: MemoryPressureLevel): string {
 
 export function generateOptimizationSuggestions(
   breakdown: ContextWindowBreakdown,
-  maxTokens: number
+  _maxTokens: number
 ): OptimizationSuggestion[] {
   const suggestions: OptimizationSuggestion[] = [];
   const availablePercent = (breakdown.availableTokens / breakdown.totalLimit) * 100;
@@ -223,11 +223,30 @@ export function calculateTokenBudget(
   };
 }
 
-// Token counting utilities
-export function countTokens(text: string): number {
-  // Approximate token count: ~4 chars per token for English
-  // This is a rough approximation - use actual tokenizer in production
-  return Math.ceil(text.length / 4);
+import { encode as gptEncode } from 'gpt-tokenizer';
+
+/**
+ * Approximate token count for `text`.
+ *
+ * Strategy:
+ *  - For OpenAI / Anthropic / most cloud models, use gpt-tokenizer (cl100k_base).
+ *    Anthropic uses a different tokenizer in production, but cl100k is close
+ *    enough for cost estimation and context-budget visualization. Exact
+ *    Anthropic tokenization would be a Phase 5+ enhancement.
+ *  - For local models (Ollama, LM Studio) — pass `model` starting with
+ *    "ollama:" or "lmstudio:" — fall back to the ~4-chars-per-token heuristic
+ *    since there is no remote tokenizer to call.
+ */
+export function countTokens(text: string, model?: string): number {
+  if (!text) return 0;
+  if (model && (model.startsWith('ollama:') || model.startsWith('lmstudio:'))) {
+    return Math.ceil(text.length / 4);
+  }
+  try {
+    return gptEncode(text).length;
+  } catch {
+    return Math.ceil(text.length / 4);
+  }
 }
 
 export function countTokensForMessages(

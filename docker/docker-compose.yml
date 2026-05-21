@@ -1,11 +1,10 @@
 version: '3.9'
 
-# Agentic Control Tower - Local-First Deployment
-# This configuration runs everything locally with no external API dependencies
-# Perfect for self-hosted deployments, development, or air-gapped environments
+# Agentic Control Tower - local-first single-user deployment.
+# SQLite lives on the bind mount in ./data; provider API keys live in that DB.
+# Ollama is opt-in via the `local-llm` profile: `docker compose --profile local-llm up`.
 
 services:
-  # API Backend
   api:
     build:
       context: ..
@@ -14,23 +13,12 @@ services:
       - "3001:3001"
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentic
-      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=file:/app/data/agentic.db
       - PORT=3001
       - LOG_LEVEL=info
-      # Ollama (local LLM) - uncomment and configure
-      # OLLAMA_BASE_URL=http://ollama:11434
-      # Local-first mode
-      - LOCAL_ONLY=true
       - ALLOWED_ORIGINS=http://localhost:3000,http://dashboard:3000
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
     volumes:
       - ./data:/app/data
-      - ./backups:/app/backups
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
@@ -38,7 +26,6 @@ services:
       timeout: 10s
       retries: 3
 
-  # Dashboard Frontend
   dashboard:
     build:
       context: ..
@@ -48,40 +35,10 @@ services:
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_API_URL=http://api:3001
-      - NEXT_PUBLIC_LOCAL_MODE=true
     depends_on:
       - api
     restart: unless-stopped
 
-  # PostgreSQL Database
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=agentic
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Redis Cache
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-
-  # Ollama - Local LLM Engine (optional, enable if using local models)
   ollama:
     image: ollama/ollama:latest
     ports:
@@ -99,64 +56,10 @@ services:
       timeout: 30s
       retries: 3
 
-  # Prometheus Metrics (optional)
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-    restart: unless-stopped
-    profiles:
-      - monitoring
-
-  # Grafana Dashboards (optional)
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3002:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./docker/grafana/provisioning:/etc/grafana/provisioning
-      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards
-    restart: unless-stopped
-    profiles:
-      - monitoring
-
-  # Jaeger Tracing (optional)
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    ports:
-      - "16686:16686"  # UI
-      - "4318:4318"    # OTLP HTTP
-      - "4317:4317"    # OTLP gRPC
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
-    restart: unless-stopped
-    profiles:
-      - monitoring
-
 volumes:
-  postgres_data:
-    driver: local
-  redis_data:
-    driver: local
   ollama_data:
     driver: local
-  prometheus_data:
-    driver: local
-  grafana_data:
-    driver: local
 
-# Networks
 networks:
   default:
     name: agentic-network
