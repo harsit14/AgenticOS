@@ -8,7 +8,9 @@ COPY apps/api ./apps/api
 
 RUN corepack enable && pnpm install --frozen-lockfile
 
+RUN pnpm --filter @agentic-os/types build
 RUN pnpm --filter @agentic-os/api build
+RUN pnpm --filter @agentic-os/api deploy --prod /prod/api
 
 FROM node:20-alpine AS runner
 
@@ -16,10 +18,8 @@ WORKDIR /app
 
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 
-COPY --from=builder --chown=nodejs:nodejs /app/apps/api/dist ./dist
-COPY --from=builder --chown=nodejs:nodejs /app/apps/api/package.json ./
-
-RUN npm install --production
+COPY --from=builder --chown=nodejs:nodejs /prod/api ./
+COPY --from=builder --chown=nodejs:nodejs /app/apps/api/drizzle ./drizzle
 
 USER nodejs
 

@@ -16,8 +16,8 @@
     //   - vertex.ts: similar
     //   - anthropic.ts: SDK type-overload mismatch on .messages.create
     //   - local-mode.ts: fetch().json() typed as unknown
-    //   - agent-manager.ts / version-manager.ts: drizzle insert-type inference
-    //   - export-import.ts / tool-registry.ts: legacy shape mismatches
+    //   - agent-manager.ts: drizzle insert-type inference
+    //   - tool-registry.ts: legacy shape mismatches
     // Each will be cleaned up in a follow-up; for now they're excluded so
     // CI can be green for the v1 happy path (executor + anthropic chat).
     // ollama.ts was ported and is now type-checked (Ollama + LM Studio).
@@ -26,8 +26,6 @@
     "src/core/providers/anthropic.ts",
     "src/core/local/local-mode.ts",
     "src/core/agents/agent-manager.ts",
-    "src/core/agents/version-manager.ts",
-    "src/core/agents/export-import.ts",
     "src/core/agents/tool-registry.ts",
     "src/routes/agents.ts"
   ]

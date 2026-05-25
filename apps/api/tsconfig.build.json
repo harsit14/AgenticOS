@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/core/providers/groq.ts",
+    "src/core/providers/vertex.ts",
+    "src/core/providers/anthropic.ts",
+    "src/core/local/local-mode.ts",
+    "src/core/agents/agent-manager.ts",
+    "src/core/agents/tool-registry.ts",
+    "src/routes/agents.ts"
+  ]
+}

@@ -8,7 +8,9 @@ COPY apps/dashboard ./apps/dashboard
 
 RUN corepack enable && pnpm install --frozen-lockfile
 
+RUN pnpm --filter @agentic-os/types build
 RUN pnpm --filter @agentic-os/dashboard build
+RUN pnpm --filter @agentic-os/dashboard deploy --prod /prod/dashboard
 
 FROM node:20-alpine AS runner
 
@@ -16,13 +18,11 @@ WORKDIR /app
 
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 
+COPY --from=builder --chown=nodejs:nodejs /prod/dashboard ./
 COPY --from=builder --chown=nodejs:nodejs /app/apps/dashboard/.next ./.next
-COPY --from=builder --chown=nodejs:nodejs /app/apps/dashboard/package.json ./
-
-RUN npm install --production
 
 USER nodejs
 
 EXPOSE 3000
 
-CMD ["npm", "start"]
+CMD ["node", "node_modules/next/dist/bin/next", "start"]

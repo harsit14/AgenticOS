@@ -1,8 +1,56 @@
 // @ts-nocheck — legacy code carried over from Phase 1/2/3; type-clean port pending. See tsconfig comment.
 import Anthropic from '@anthropic-ai/sdk';
-import type { ChatParams, ChatResponse, UsageInfo } from '@agentic-os/types';
+import type { ChatMessage, ChatParams, ChatResponse, ToolCall, UsageInfo } from '@agentic-os/types';
 import type { StreamEvent } from './types.js';
 import { BaseProvider, getModelPricing } from './base.js';
+
+function parseToolArguments(raw: string): unknown {
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function buildAnthropicMessages(messages: ChatMessage[]) {
+  return messages
+    .filter(m => m.role !== 'system')
+    .map(m => {
+      if (m.role === 'assistant' && m.toolCalls?.length) {
+        const content: unknown[] = [];
+        if (m.content) {
+          content.push({ type: 'text', text: m.content });
+        }
+        for (const call of m.toolCalls) {
+          content.push({
+            type: 'tool_use',
+            id: call.id,
+            name: call.name,
+            input: parseToolArguments(call.arguments),
+          });
+        }
+        return { role: 'assistant', content };
+      }
+
+      if (m.role === 'tool') {
+        return {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: m.toolCallId ?? '',
+              content: m.content,
+            },
+          ],
+        };
+      }
+
+      return {
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: m.content,
+      };
+    });
+}
 
 export class AnthropicProvider extends BaseProvider {
   readonly providerId = 'anthropic';
@@ -31,17 +79,16 @@ export class AnthropicProvider extends BaseProvider {
           max_tokens: params.maxTokens || 4096,
           temperature: params.temperature ?? 0.7,
           system: systemPrompt,
-          messages: params.messages.map(m => ({
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-          })),
-          ...(params.tools && params.tools.length > 0 ? {
-            tools: params.tools.map(t => ({
-              name: t.id,
-              description: t.description,
-              input_schema: t.parameters as Record<string, unknown>,
-            })),
-          } : {}),
+          messages: buildAnthropicMessages(params.messages),
+          ...(params.tools && params.tools.length > 0
+            ? {
+                tools: params.tools.map(t => ({
+                  name: t.id,
+                  description: t.description,
+                  input_schema: t.parameters as Record<string, unknown>,
+                })),
+              }
+            : {}),
         });
       });
 
@@ -57,12 +104,18 @@ export class AnthropicProvider extends BaseProvider {
       // Extract content from response
       let content = '';
       let finishReason = 'stop';
+      const toolCalls: ToolCall[] = [];
 
       for (const block of response.content) {
         if (block.type === 'text') {
           content += block.text;
         } else if (block.type === 'tool_use') {
           finishReason = 'tool_use';
+          toolCalls.push({
+            id: block.id,
+            name: block.name,
+            arguments: JSON.stringify(block.input ?? {}),
+          });
         }
       }
 
@@ -73,6 +126,7 @@ export class AnthropicProvider extends BaseProvider {
         latencyMs,
         costUsd,
         raw: response,
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
       };
     } catch (error) {
       throw this.parseError(error, this.providerId);
@@ -117,7 +171,11 @@ export class AnthropicProvider extends BaseProvider {
 
       yield {
         type: 'done',
-        usage: { inputTokens, outputTokens: totalOutputTokens, totalTokens: inputTokens + totalOutputTokens },
+        usage: {
+          inputTokens,
+          outputTokens: totalOutputTokens,
+          totalTokens: inputTokens + totalOutputTokens,
+        },
         finishReason: 'stop',
       };
     } catch (error) {
@@ -125,7 +183,9 @@ export class AnthropicProvider extends BaseProvider {
     }
   }
 
-  async embed(texts: string[]): Promise<{ embeddings: number[][]; usage: UsageInfo; model: string }> {
+  async embed(
+    texts: string[]
+  ): Promise<{ embeddings: number[][]; usage: UsageInfo; model: string }> {
     // Anthropic doesn't have an embedding model, use a placeholder
     return {
       embeddings: texts.map(() => []),

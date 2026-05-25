@@ -38,7 +38,7 @@ export async function providersRouter(app: FastifyInstance) {
       }
       const updated = await db.select().from(providers).where(eq(providers.id, id)).get();
       return reply.send({ success: true, data: updated });
-    },
+    }
   );
 
   // POST /api/providers/:id/test — verify the stored API key works
@@ -67,7 +67,7 @@ export async function providersRouter(app: FastifyInstance) {
     }
 
     const manager = getProviderManager();
-    if (apiKey) manager.configure(id, { apiKey });
+    if (apiKey) manager.configure(id, { apiKey, baseUrl: provider.baseUrl });
     const llm = manager.getProvider(id);
     if (!llm) {
       return reply.code(500).send({
@@ -124,7 +124,7 @@ export async function providersRouter(app: FastifyInstance) {
           });
         }
         const body = (await res.json()) as { data?: Array<{ id: string }> };
-        discovered = (body.data ?? []).map((m) => ({ id: m.id }));
+        discovered = (body.data ?? []).map(m => ({ id: m.id }));
       } else if (id === 'ollama') {
         // GET /api/tags → { models: [{ name, ... }] }
         const res = await fetch(`${provider.baseUrl}/api/tags`);
@@ -135,7 +135,7 @@ export async function providersRouter(app: FastifyInstance) {
           });
         }
         const body = (await res.json()) as { models?: Array<{ name: string }> };
-        discovered = (body.models ?? []).map((m) => ({ id: m.name }));
+        discovered = (body.models ?? []).map(m => ({ id: m.name }));
       } else {
         return reply.send({
           success: true,
@@ -162,55 +162,52 @@ export async function providersRouter(app: FastifyInstance) {
       contextWindow?: number;
       supportsFunctionCalling?: boolean;
     };
-  }>(
-    '/:id/register-model',
-    async (request, reply) => {
-      const { id } = request.params;
-      const { name, displayName, contextWindow, supportsFunctionCalling } =
-        request.body ?? ({} as { name?: string });
-      if (!name) throw new InvalidInputError('name is required');
+  }>('/:id/register-model', async (request, reply) => {
+    const { id } = request.params;
+    const { name, displayName, contextWindow, supportsFunctionCalling } =
+      request.body ?? ({} as { name?: string });
+    if (!name) throw new InvalidInputError('name is required');
 
-      const provider = await db.select().from(providers).where(eq(providers.id, id)).get();
-      if (!provider) throw new NotFoundError(`Provider not found: ${id}`, 'provider');
+    const provider = await db.select().from(providers).where(eq(providers.id, id)).get();
+    if (!provider) throw new NotFoundError(`Provider not found: ${id}`, 'provider');
 
-      // Stable ID derived from provider + name. Re-registering an existing
-      // model updates the fields the caller supplied (e.g. toggling function
-      // calling) rather than silently returning the stale row.
-      const modelId = `${id}:${name}`;
-      const existing = await db.select().from(models).where(eq(models.id, modelId)).get();
-      if (existing) {
-        const patch: Partial<typeof models.$inferInsert> = { updatedAt: new Date() };
-        if (displayName !== undefined) patch.displayName = displayName;
-        if (contextWindow !== undefined) patch.contextWindow = contextWindow;
-        if (supportsFunctionCalling !== undefined) {
-          patch.supportsFunctionCalling = supportsFunctionCalling;
-        }
-        await db.update(models).set(patch).where(eq(models.id, modelId)).run();
-        const updated = await db.select().from(models).where(eq(models.id, modelId)).get();
-        return reply.send({ success: true, data: updated });
+    // Stable ID derived from provider + name. Re-registering an existing
+    // model updates the fields the caller supplied (e.g. toggling function
+    // calling) rather than silently returning the stale row.
+    const modelId = `${id}:${name}`;
+    const existing = await db.select().from(models).where(eq(models.id, modelId)).get();
+    if (existing) {
+      const patch: Partial<typeof models.$inferInsert> = { updatedAt: new Date() };
+      if (displayName !== undefined) patch.displayName = displayName;
+      if (contextWindow !== undefined) patch.contextWindow = contextWindow;
+      if (supportsFunctionCalling !== undefined) {
+        patch.supportsFunctionCalling = supportsFunctionCalling;
       }
+      await db.update(models).set(patch).where(eq(models.id, modelId)).run();
+      const updated = await db.select().from(models).where(eq(models.id, modelId)).get();
+      return reply.send({ success: true, data: updated });
+    }
 
-      const now = new Date();
-      const row = {
-        id: modelId,
-        providerId: id,
-        name,
-        displayName: displayName ?? name,
-        contextWindow: contextWindow ?? 8192,
-        inputCostPer1M: 0,
-        outputCostPer1M: 0,
-        supportsStreaming: true,
-        supportsVision: false,
-        // Default true: most modern local models accept the OpenAI tools
-        // param, and the executor only sends tools when the agent has any.
-        supportsFunctionCalling: supportsFunctionCalling ?? true,
-        status: 'active' as const,
-        metadata: {},
-        createdAt: now,
-        updatedAt: now,
-      };
-      await db.insert(models).values(row).run();
-      return reply.code(201).send({ success: true, data: row });
-    },
-  );
+    const now = new Date();
+    const row = {
+      id: modelId,
+      providerId: id,
+      name,
+      displayName: displayName ?? name,
+      contextWindow: contextWindow ?? 8192,
+      inputCostPer1M: 0,
+      outputCostPer1M: 0,
+      supportsStreaming: true,
+      supportsVision: false,
+      // Default true: most modern local models accept the OpenAI tools
+      // param, and the executor only sends tools when the agent has any.
+      supportsFunctionCalling: supportsFunctionCalling ?? true,
+      status: 'active' as const,
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    };
+    await db.insert(models).values(row).run();
+    return reply.code(201).send({ success: true, data: row });
+  });
 }

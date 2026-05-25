@@ -1,6 +1,6 @@
 // @ts-nocheck — legacy code carried over from Phase 1/2/3; type-clean port pending. See tsconfig comment.
 import type { ChatParams, ChatResponse, UsageInfo } from '@agentic-os/types';
-import type { StreamEvent } from './types.js';
+import type { ProviderConfig, StreamEvent } from './types.js';
 import { BaseProvider, getModelPricing } from './base.js';
 
 export class VertexProvider extends BaseProvider {
@@ -8,11 +8,11 @@ export class VertexProvider extends BaseProvider {
   readonly providerName = 'Google Vertex AI';
   readonly baseUrl = 'https://{location}-aiplatform.googleapis.com/v1';
 
-  private apiKey: string;
-
-  constructor() {
-    super({});
-    this.apiKey = process.env.VERTEX_AI_API_KEY || '';
+  constructor(config: ProviderConfig = {}) {
+    super({
+      ...config,
+      apiKey: config.apiKey ?? process.env.VERTEX_AI_API_KEY,
+    });
   }
 
   async chat(params: ChatParams): Promise<ChatResponse> {
@@ -53,7 +53,8 @@ export class VertexProvider extends BaseProvider {
 
       const text = response.candidates?.[0]?.content?.parts?.[0]?.text || '';
       const usage = response.usageMetadata || {};
-      const inputTokens = usage.promptTokenCount || BaseProvider.countMessageTokens(params.messages);
+      const inputTokens =
+        usage.promptTokenCount || BaseProvider.countMessageTokens(params.messages);
       const outputTokens = usage.candidatesTokenCount || BaseProvider.countTokens(text);
       const totalTokens = usage.totalTokenCount || inputTokens + outputTokens;
 
@@ -123,7 +124,11 @@ export class VertexProvider extends BaseProvider {
       const inputTokens = BaseProvider.countMessageTokens(params.messages);
       yield {
         type: 'done',
-        usage: { inputTokens, outputTokens: totalOutputTokens, totalTokens: inputTokens + totalOutputTokens },
+        usage: {
+          inputTokens,
+          outputTokens: totalOutputTokens,
+          totalTokens: inputTokens + totalOutputTokens,
+        },
         finishReason: 'stop',
       };
     } catch (error) {
@@ -131,7 +136,9 @@ export class VertexProvider extends BaseProvider {
     }
   }
 
-  async embed(texts: string[]): Promise<{ embeddings: number[][]; usage: UsageInfo; model: string }> {
+  async embed(
+    texts: string[]
+  ): Promise<{ embeddings: number[][]; usage: UsageInfo; model: string }> {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/embedding-001:batchEmbedContents?key=${this.apiKey}`,
       {
@@ -179,8 +186,8 @@ export class BedrockProvider extends BaseProvider {
   readonly providerName = 'AWS Bedrock';
   readonly baseUrl = `https://bedrock.${process.env.AWS_REGION || 'us-east-1'}.amazonaws.com`;
 
-  constructor() {
-    super({});
+  constructor(config: ProviderConfig = {}) {
+    super(config);
   }
 
   async chat(params: ChatParams): Promise<ChatResponse> {
@@ -189,7 +196,9 @@ export class BedrockProvider extends BaseProvider {
     try {
       // Bedrock requires AWS credentials and signing
       const AWS = await import('@aws-sdk/client-bedrock-runtime');
-      const client = new AWS.BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-east-1' });
+      const client = new AWS.BedrockRuntimeClient({
+        region: process.env.AWS_REGION || 'us-east-1',
+      });
 
       const model = params.model || 'anthropic.claude-3-sonnet-20240229-v1:0';
       const modelId = model.includes('.') ? model : `anthropic.${model}`;
@@ -240,7 +249,9 @@ export class BedrockProvider extends BaseProvider {
   async *streamChat(params: ChatParams): AsyncGenerator<StreamEvent> {
     try {
       const AWS = await import('@aws-sdk/client-bedrock-runtime');
-      const client = new AWS.BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-east-1' });
+      const client = new AWS.BedrockRuntimeClient({
+        region: process.env.AWS_REGION || 'us-east-1',
+      });
 
       const model = params.model || 'anthropic.claude-3-sonnet-20240229-v1:0';
       const modelId = model.includes('.') ? model : `anthropic.${model}`;
@@ -284,7 +295,9 @@ export class BedrockProvider extends BaseProvider {
     }
   }
 
-  async embed(texts: string[]): Promise<{ embeddings: number[][]; usage: UsageInfo; model: string }> {
+  async embed(
+    texts: string[]
+  ): Promise<{ embeddings: number[][]; usage: UsageInfo; model: string }> {
     // Bedrock embedding models vary by model
     return {
       embeddings: texts.map(() => []),

@@ -19,6 +19,7 @@ vi.mock('next/router', () => ({
 // Mock the api module before the page is imported.
 const getAgents = vi.fn();
 const getModels = vi.fn();
+const getTools = vi.fn();
 const deleteAgent = vi.fn();
 const createAgent = vi.fn();
 
@@ -26,6 +27,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getAgents: () => getAgents(),
     getModels: () => getModels(),
+    getTools: () => getTools(),
     deleteAgent: (id: string) => deleteAgent(id),
     createAgent: (input: unknown) => createAgent(input),
   },
@@ -50,7 +52,7 @@ function renderPage() {
   return render(
     <QueryClientProvider client={client}>
       <AgentsPage />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
@@ -95,18 +97,18 @@ describe('AgentsPage', () => {
   beforeEach(() => {
     getAgents.mockReset();
     getModels.mockReset();
+    getTools.mockReset();
     deleteAgent.mockReset();
     createAgent.mockReset();
     getModels.mockResolvedValue([FIXTURE_MODEL]);
+    getTools.mockResolvedValue([]);
   });
 
   afterEach(() => cleanup());
 
   it('renders a loading skeleton while fetching', async () => {
     let resolve!: (value: Agent[]) => void;
-    getAgents.mockImplementation(
-      () => new Promise<Agent[]>((r) => (resolve = r)),
-    );
+    getAgents.mockImplementation(() => new Promise<Agent[]>(r => (resolve = r)));
     const { container } = renderPage();
     expect(container.querySelector('.animate-pulse')).not.toBeNull();
     // Resolve to clean up the pending query before the test ends.
@@ -118,9 +120,7 @@ describe('AgentsPage', () => {
     getAgents.mockResolvedValueOnce([]);
     renderPage();
     expect(await screen.findByText(/no agents yet/i)).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: /create your first agent/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /create your first agent/i })).toBeInTheDocument();
   });
 
   it('renders an error banner with retry when the fetch fails', async () => {

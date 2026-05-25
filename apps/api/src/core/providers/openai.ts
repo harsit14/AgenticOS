@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import type { ChatParams, ChatResponse, UsageInfo, ToolCall } from '@agentic-os/types';
-import type { StreamEvent } from './types.js';
+import type { ProviderConfig, StreamEvent } from './types.js';
 import { BaseProvider, getModelPricing } from './base.js';
 
 // Build the OpenAI message array, threading assistant tool calls and tool
@@ -15,7 +15,7 @@ function buildOpenAIMessages(params: ChatParams): OpenAI.Chat.ChatCompletionMess
       messages.push({
         role: 'assistant',
         content: m.content || null,
-        tool_calls: m.toolCalls.map((tc) => ({
+        tool_calls: m.toolCalls.map(tc => ({
           id: tc.id,
           type: 'function' as const,
           function: { name: tc.name, arguments: tc.arguments },
@@ -45,10 +45,11 @@ export class OpenAIProvider extends BaseProvider {
 
   private client: OpenAI;
 
-  constructor() {
-    super({});
+  constructor(config: ProviderConfig = {}) {
+    super(config);
     this.client = new OpenAI({
       apiKey: this.apiKey,
+      baseURL: config.baseUrl,
       timeout: this.timeout,
     });
   }
@@ -63,16 +64,18 @@ export class OpenAIProvider extends BaseProvider {
           messages: buildOpenAIMessages(params),
           temperature: params.temperature ?? 0.7,
           max_tokens: params.maxTokens,
-          ...(params.tools && params.tools.length > 0 ? {
-            tools: params.tools.map(t => ({
-              type: 'function' as const,
-              function: {
-                name: t.id,
-                description: t.description,
-                parameters: t.parameters,
-              },
-            })),
-          } : {}),
+          ...(params.tools && params.tools.length > 0
+            ? {
+                tools: params.tools.map(t => ({
+                  type: 'function' as const,
+                  function: {
+                    name: t.id,
+                    description: t.description,
+                    parameters: t.parameters,
+                  },
+                })),
+              }
+            : {}),
         });
       });
 
@@ -89,10 +92,9 @@ export class OpenAIProvider extends BaseProvider {
 
       const toolCalls: ToolCall[] = (choice.message.tool_calls ?? [])
         .filter(
-          (tc): tc is OpenAI.Chat.ChatCompletionMessageFunctionToolCall =>
-            tc.type === 'function',
+          (tc): tc is OpenAI.Chat.ChatCompletionMessageFunctionToolCall => tc.type === 'function'
         )
-        .map((tc) => ({
+        .map(tc => ({
           id: tc.id,
           name: tc.function.name,
           arguments: tc.function.arguments,
@@ -126,7 +128,9 @@ export class OpenAIProvider extends BaseProvider {
       const stream = await this.client.chat.completions.create({
         model: params.model || 'gpt-4o',
         messages: [
-          ...(params.systemPrompt ? [{ role: 'system' as const, content: params.systemPrompt }] : []),
+          ...(params.systemPrompt
+            ? [{ role: 'system' as const, content: params.systemPrompt }]
+            : []),
           ...params.messages.map(m => ({
             role: m.role as 'user' | 'assistant' | 'system',
             content: m.content,
@@ -152,7 +156,11 @@ export class OpenAIProvider extends BaseProvider {
 
       yield {
         type: 'done',
-        usage: { inputTokens, outputTokens: totalOutputTokens, totalTokens: inputTokens + totalOutputTokens },
+        usage: {
+          inputTokens,
+          outputTokens: totalOutputTokens,
+          totalTokens: inputTokens + totalOutputTokens,
+        },
         finishReason: 'stop',
       };
     } catch (error) {
@@ -160,7 +168,9 @@ export class OpenAIProvider extends BaseProvider {
     }
   }
 
-  async embed(texts: string[]): Promise<{ embeddings: number[][]; usage: UsageInfo; model: string }> {
+  async embed(
+    texts: string[]
+  ): Promise<{ embeddings: number[][]; usage: UsageInfo; model: string }> {
     const response = await this.client.embeddings.create({
       model: 'text-embedding-3-small',
       input: texts,
@@ -191,12 +201,13 @@ export class OpenAIProvider extends BaseProvider {
 export class AzureProvider extends BaseProvider {
   readonly providerId = 'azure';
   readonly providerName = 'Azure OpenAI';
-  readonly baseUrl = process.env.AZURE_OPENAI_ENDPOINT || '';
+  readonly baseUrl: string;
 
   private client: OpenAI;
 
-  constructor() {
-    super({});
+  constructor(config: ProviderConfig = {}) {
+    super(config);
+    this.baseUrl = config.baseUrl ?? process.env.AZURE_OPENAI_ENDPOINT ?? '';
     const apiVersion = '2024-02-01';
     this.client = new OpenAI({
       apiKey: this.apiKey,
@@ -208,24 +219,26 @@ export class AzureProvider extends BaseProvider {
   async chat(params: ChatParams): Promise<ChatResponse> {
     // Azure uses deployment name as model
     const deployment = params.model || 'gpt-4o';
-    return this.client.chat.completions.create({
-      model: deployment,
-      messages: params.messages as OpenAI.Chat.ChatCompletionMessageParam[],
-    }).then(response => {
-      const usage = response.usage!;
-      return {
-        content: response.choices[0].message.content || '',
-        finishReason: 'stop' as const,
-        usage: {
-          inputTokens: usage.prompt_tokens,
-          outputTokens: usage.completion_tokens,
-          totalTokens: usage.total_tokens,
-        },
-        latencyMs: 0,
-        costUsd: 0,
-        raw: response,
-      };
-    });
+    return this.client.chat.completions
+      .create({
+        model: deployment,
+        messages: params.messages as OpenAI.Chat.ChatCompletionMessageParam[],
+      })
+      .then(response => {
+        const usage = response.usage!;
+        return {
+          content: response.choices[0].message.content || '',
+          finishReason: 'stop' as const,
+          usage: {
+            inputTokens: usage.prompt_tokens,
+            outputTokens: usage.completion_tokens,
+            totalTokens: usage.total_tokens,
+          },
+          latencyMs: 0,
+          costUsd: 0,
+          raw: response,
+        };
+      });
   }
 
   async *streamChat(params: ChatParams): AsyncGenerator<StreamEvent> {
@@ -243,16 +256,26 @@ export class AzureProvider extends BaseProvider {
       }
     }
 
-    yield { type: 'done', usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, finishReason: 'stop' };
+    yield {
+      type: 'done',
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      finishReason: 'stop',
+    };
   }
 
-  async embed(texts: string[]): Promise<{ embeddings: number[][]; usage: UsageInfo; model: string }> {
+  async embed(
+    texts: string[]
+  ): Promise<{ embeddings: number[][]; usage: UsageInfo; model: string }> {
     throw new Error('Azure embeddings not implemented');
   }
 
   async ping(): Promise<boolean> {
     try {
-      await this.client.chat.completions.create({ model: 'dummy', messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 });
+      await this.client.chat.completions.create({
+        model: 'dummy',
+        messages: [{ role: 'user', content: 'ping' }],
+        max_tokens: 1,
+      });
       return false; // Will error on actual call
     } catch (e) {
       return false;

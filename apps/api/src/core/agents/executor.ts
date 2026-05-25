@@ -51,9 +51,7 @@ const MAX_LOOP_WALL_MS = 120_000;
 const MAX_TOOL_RESULT_CHARS = 4000;
 
 function truncate(text: string, max = MAX_TOOL_RESULT_CHARS): string {
-  return text.length > max
-    ? `${text.slice(0, max)}… [truncated ${text.length - max} chars]`
-    : text;
+  return text.length > max ? `${text.slice(0, max)}… [truncated ${text.length - max} chars]` : text;
 }
 
 /**
@@ -64,9 +62,9 @@ function truncate(text: string, max = MAX_TOOL_RESULT_CHARS): string {
 async function runToolCall(
   call: ToolCall,
   agentTools: ToolDefinition[],
-  ctx: { sessionId: string; agentId: string },
+  ctx: { sessionId: string; agentId: string }
 ): Promise<string> {
-  const allowed = agentTools.find((t) => t.id === call.name);
+  const allowed = agentTools.find(t => t.id === call.name);
   if (!allowed) {
     return `Error: tool "${call.name}" is not available to this agent.`;
   }
@@ -135,7 +133,7 @@ async function prepareTurn(sessionId: string, userContent: string): Promise<Prep
   const modelId = session.modelId || agent.defaultModelId || defaultFromSettings;
   if (!modelId) {
     throw new ConfigurationError(
-      'No model resolved: set session.modelId, agent.defaultModelId, or settings.default_model_id',
+      'No model resolved: set session.modelId, agent.defaultModelId, or settings.default_model_id'
     );
   }
 
@@ -144,7 +142,11 @@ async function prepareTurn(sessionId: string, userContent: string): Promise<Prep
   if (!model) {
     throw new NotFoundError(`Model not found: ${modelId}`, 'model');
   }
-  const provider = await db.select().from(providers).where(eq(providers.id, model.providerId)).get();
+  const provider = await db
+    .select()
+    .from(providers)
+    .where(eq(providers.id, model.providerId))
+    .get();
   if (!provider) {
     throw new NotFoundError(`Provider not found: ${model.providerId}`, 'provider');
   }
@@ -171,9 +173,9 @@ async function prepareTurn(sessionId: string, userContent: string): Promise<Prep
   // rows and empty intermediate assistant rows — replaying them without their
   // ids would violate the OpenAI message format.
   const historyAll: ChatMessage[] = priorWindow
-    .filter((m) => m.role !== 'tool')
-    .filter((m) => !(m.role === 'assistant' && m.content.trim() === ''))
-    .map((m) => ({
+    .filter(m => m.role !== 'tool')
+    .filter(m => !(m.role === 'assistant' && m.content.trim() === ''))
+    .map(m => ({
       role: m.role as ChatMessage['role'],
       content: m.content,
     }));
@@ -195,14 +197,14 @@ async function prepareTurn(sessionId: string, userContent: string): Promise<Prep
     throw new InvalidInputError(
       `Message too long for ${model.displayName}: the system prompt + your ` +
         `message need ~${fixedTokens} tokens but only ${inputBudget} fit ` +
-        `(context window ${model.contextWindow}, ${reservedOutput} reserved for the reply).`,
+        `(context window ${model.contextWindow}, ${reservedOutput} reserved for the reply).`
     );
   }
 
   const history: ChatMessage[] = [...historyAll];
   let historyTokens = history.reduce(
     (sum, m) => sum + countTokens(m.content, modelId) + perMessageOverhead,
-    0,
+    0
   );
   let trimmedMessages = 0;
   while (history.length > 0 && fixedTokens + historyTokens > inputBudget) {
@@ -234,7 +236,7 @@ async function prepareTurn(sessionId: string, userContent: string): Promise<Prep
   // 9. Resolve the provider implementation.
   const manager = getProviderManager();
   if (apiKey) {
-    manager.configure(provider.id, { apiKey });
+    manager.configure(provider.id, { apiKey, baseUrl: provider.baseUrl });
   }
   const llm = manager.getProvider(provider.id);
   if (!llm) {
@@ -270,7 +272,7 @@ async function recordUsage(
   modelId: string,
   usage: UsageInfo,
   costUsd: number,
-  latencyMs: number,
+  latencyMs: number
 ): Promise<void> {
   const today = new Date().toISOString().slice(0, 10);
   const existing = await db
@@ -280,15 +282,14 @@ async function recordUsage(
       and(
         eq(usageRecords.agentId, agentId),
         eq(usageRecords.modelId, modelId),
-        eq(usageRecords.date, today),
-      ),
+        eq(usageRecords.date, today)
+      )
     )
     .get();
 
   if (existing) {
     const nextCount = existing.requestCount + 1;
-    const nextAvgLatency =
-      (existing.avgLatencyMs * existing.requestCount + latencyMs) / nextCount;
+    const nextAvgLatency = (existing.avgLatencyMs * existing.requestCount + latencyMs) / nextCount;
     await db
       .update(usageRecords)
       .set({
@@ -342,14 +343,14 @@ async function touchSession(session: SessionRow): Promise<void> {
  * single LLM call. Persists every message and aggregates usage.
  */
 export async function executeMessage(params: ExecuteMessageParams): Promise<ExecuteMessageResult> {
-  return withSpan('agent.execute', (span) => executeMessageInner(params, span), {
+  return withSpan('agent.execute', span => executeMessageInner(params, span), {
     'session.id': params.sessionId,
   });
 }
 
 async function executeMessageInner(
   params: ExecuteMessageParams,
-  span: import('@opentelemetry/api').Span,
+  span: import('@opentelemetry/api').Span
 ): Promise<ExecuteMessageResult> {
   const { sessionId, userMessage: userContent } = params;
   const prepared = await prepareTurn(sessionId, userContent);
@@ -387,9 +388,7 @@ async function executeMessageInner(
     // After the step budget is spent, make one last call with no tools so the
     // model is forced to produce a text answer.
     const offerTools =
-      toolsForLlm &&
-      iteration < MAX_TOOL_STEPS &&
-      Date.now() - loopStartedAt < MAX_LOOP_WALL_MS;
+      toolsForLlm && iteration < MAX_TOOL_STEPS && Date.now() - loopStartedAt < MAX_LOOP_WALL_MS;
 
     const stepStartedAt = Date.now();
     const response = await withSpan(
@@ -405,14 +404,10 @@ async function executeMessageInner(
         'provider.id': provider.id,
         'agent.id': agent.id,
         'llm.iteration': iteration,
-      },
+      }
     );
     const stepLatency = Date.now() - stepStartedAt;
-    const stepCost = calculateCost(
-      model,
-      response.usage.inputTokens,
-      response.usage.outputTokens,
-    );
+    const stepCost = calculateCost(model, response.usage.inputTokens, response.usage.outputTokens);
     totalInput += response.usage.inputTokens;
     totalOutput += response.usage.outputTokens;
     totalCost += stepCost;
@@ -428,8 +423,7 @@ async function executeMessageInner(
     });
 
     const toolCalls = response.toolCalls ?? [];
-    const wantsTools =
-      offerTools && response.finishReason === 'tool_use' && toolCalls.length > 0;
+    const wantsTools = offerTools && response.finishReason === 'tool_use' && toolCalls.length > 0;
 
     if (!wantsTools) {
       // Final answer — persist it and stop.
@@ -518,7 +512,7 @@ async function executeMessageInner(
     modelId,
     { inputTokens: totalInput, outputTokens: totalOutput, totalTokens },
     totalCost,
-    loopLatency,
+    loopLatency
   );
   await touchSession(session);
 
@@ -542,7 +536,7 @@ async function executeMessageInner(
  * assistant message is persisted.
  */
 export async function* executeMessageStream(
-  params: ExecuteMessageParams,
+  params: ExecuteMessageParams
 ): AsyncGenerator<StreamExecEvent> {
   const { sessionId, userMessage: userContent } = params;
   const prepared = await prepareTurn(sessionId, userContent);
